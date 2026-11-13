@@ -455,13 +455,24 @@ namespace CertHarvester
 				string ownerName = ExtractCommonName(certificate.Subject);
 				string issuerName = ExtractCommonName(certificate.Issuer);
 
-				// Проверка расширений сертификата на встроенную лицензию КриптоПро
+				// Универсальная проверка принадлежности к СКЗИ КриптоПро и наличия лицензии
 				string licenseVersion = string.Empty;
-				bool hasEmbeddedLicense = CryptoProReader.CheckEmbeddedLicense(certificate, out licenseVersion);
+				bool isCryptoProCertificate = CryptoProReader.IsCryptoProCertificate(certificate, out licenseVersion);
+				bool hasEmbeddedLicense = isCryptoProCertificate;
 
-				// Определение версии КриптоПро на целевом ПК
-				string installedCryptoProVersion = CryptoProReader.GetInstalledCryptoProVersion(computerName);
-				string finalCryptoProVersion = hasEmbeddedLicense ? licenseVersion : installedCryptoProVersion;
+				// Определение версии КриптоПро: для сертификатов КриптоПро выводится версия, для остальных — прочерк
+				string finalCryptoProVersion = "—";
+				if (isCryptoProCertificate == true)
+				{
+					if (!string.IsNullOrEmpty(licenseVersion))
+					{
+						finalCryptoProVersion = licenseVersion;
+					}
+					else
+					{
+						finalCryptoProVersion = CryptoProReader.GetInstalledCryptoProVersion(computerName);
+					}
+				}
 
 				DateTime currentTimestamp = DateTime.Now;
 
