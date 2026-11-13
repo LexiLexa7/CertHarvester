@@ -123,27 +123,28 @@ namespace CertHarvester
 		// Сканирование удаленного компьютера в локальной сети через типовые сетевые UNC-пути
 		public static void ScanNetworkComputer(string computerName, List<string> configuredPaths, List<CertificateRecord> records)
 		{
-			bool isLocal = string.Equals(computerName, "localhost", StringComparison.OrdinalIgnoreCase) || string.Equals(computerName, ".", StringComparison.OrdinalIgnoreCase) || string.Equals(computerName, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+			string cleanHost = ExtractCleanHostName(computerName);
+			bool isLocal = string.Equals(cleanHost, "localhost", StringComparison.OrdinalIgnoreCase) || string.Equals(cleanHost, ".", StringComparison.OrdinalIgnoreCase) || string.Equals(cleanHost, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
 
 			if (isLocal)
 			{
-				Logger.LogInfo("Сетевой узел " + computerName + " указывает на локальный компьютер, пропуск сетевого UNC");
+				Logger.LogInfo("Сетевой узел " + cleanHost + " указывает на локальный компьютер, пропуск сетевого UNC");
 				return;
 			}
 
 			// Проверка доступности узла по сети через Ping
-			bool isHostReachable = CheckHostAvailability(computerName);
+			bool isHostReachable = CheckHostAvailability(cleanHost);
 			if (!isHostReachable)
 			{
-				Logger.LogWarning("Сетевой узел " + computerName + " не отвечает на ICMP-запросы (Ping)");
+				Logger.LogWarning("Сетевой узел " + cleanHost + " не отвечает на ICMP-запросы (Ping)");
 			}
 
 			// Формирование типовых сетевых путей (административные и общие сетевые папки)
 			List<string> networkSharePaths = new List<string>();
-			networkSharePaths.Add(string.Format(@"\\{0}\c$\Certs", computerName));
-			networkSharePaths.Add(string.Format(@"\\{0}\Certs", computerName));
-			networkSharePaths.Add(string.Format(@"\\{0}\Certificates", computerName));
-			networkSharePaths.Add(string.Format(@"\\{0}\c$\Users\Public", computerName));
+			networkSharePaths.Add(string.Format(@"\\{0}\c$\Certs", cleanHost));
+			networkSharePaths.Add(string.Format(@"\\{0}\Certs", cleanHost));
+			networkSharePaths.Add(string.Format(@"\\{0}\Certificates", cleanHost));
+			networkSharePaths.Add(string.Format(@"\\{0}\c$\Users\Public", cleanHost));
 
 			// Добавление пользовательских путей, адаптированных под сетевой компьютер
 			if (configuredPaths != null)
@@ -161,7 +162,7 @@ namespace CertHarvester
 					{
 						char driveLetter = rawPath[0];
 						string relativePart = rawPath.Substring(2).TrimStart('\\', '/');
-						string uncPath = string.Format(@"\\{0}\{1}$\{2}", computerName, driveLetter, relativePart);
+						string uncPath = string.Format(@"\\{0}\{1}$\{2}", cleanHost, driveLetter, relativePart);
 						if (!networkSharePaths.Contains(uncPath))
 						{
 							networkSharePaths.Add(uncPath);
@@ -180,9 +181,36 @@ namespace CertHarvester
 			for (int shareIndex = 0; shareIndex < networkSharePaths.Count; shareIndex++)
 			{
 				string currentShare = networkSharePaths[shareIndex];
-				Logger.LogInfo("Проверка сетевого пути ПК " + computerName + ": " + currentShare);
-				ScanDirectoryRecursive(currentShare, computerName, records);
+				Logger.LogInfo("Проверка сетевого пути ПК " + cleanHost + ": " + currentShare);
+				ScanDirectoryRecursive(currentShare, cleanHost, records);
 			}
+		}
+
+		// Извлечение чистого имени хоста или IP-адреса из строки вида 'PC-NAME (192.168.1.1)'
+		private static string ExtractCleanHostName(string rawComputerName)
+		{
+			if (string.IsNullOrWhiteSpace(rawComputerName))
+			{
+				return string.Empty;
+			}
+
+			string trimmed = rawComputerName.Trim();
+			if (trimmed.Contains("(") && trimmed.Contains(")"))
+			{
+				int startParen = trimmed.IndexOf('(');
+				int endParen = trimmed.IndexOf(')');
+				if (endParen > startParen)
+				{
+					string hostPart = trimmed.Substring(0, startParen).Trim();
+					if (!string.IsNullOrEmpty(hostPart))
+					{
+						return hostPart;
+					}
+					return trimmed.Substring(startParen + 1, endParen - startParen - 1).Trim();
+				}
+			}
+
+			return trimmed;
 		}
 
 		// Парсинг файла открытой части сертификата X.509 и сбор всех необходимых метаданных

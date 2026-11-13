@@ -115,6 +115,21 @@ namespace CertHarvester
 		/// </summary>
 		public string TableName { get; set; }
 
+		/// <summary>
+		/// Автоматическое создание таблицы в БД при ее отсутствии
+		/// </summary>
+		public bool AutoCreateTable { get; set; }
+
+		/// <summary>
+		/// Признак использования темной темы графического интерфейса
+		/// </summary>
+		public bool IsDarkTheme { get; set; }
+
+		/// <summary>
+		/// Список сохраненных сертификатов для постоянного хранения в конфигурации
+		/// </summary>
+		public List<CertificateRecord> Certificates { get; set; }
+
 		// Конструктор по умолчанию с заполнением типовыми начальными значениями
 		public AppConfig()
 		{
@@ -122,6 +137,9 @@ namespace CertHarvester
 			NetworkComputers = new List<string>();
 			ConnectionString = "Server=localhost;Database=CertHarvesterDB;Integrated Security=True;";
 			TableName = "Certificates";
+			AutoCreateTable = true;
+			IsDarkTheme = false;
+			Certificates = new List<CertificateRecord>();
 		}
 	}
 }

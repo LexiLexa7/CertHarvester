@@ -11,7 +11,7 @@ using System.Windows.Forms;
 namespace CertHarvester
 {
 	/// <summary>
-	/// Класс модели данных компьютера в локальной сети для отображения в боковой панели
+	/// Модель данных рабочего узла локальной сети для визуализации в боковой панели
 	/// </summary>
 	public class NetworkNodeItem
 	{
@@ -29,7 +29,7 @@ namespace CertHarvester
 	}
 
 	/// <summary>
-	/// Современная форма панели управления СКЗИ с карточным интерфейсом и темным терминалом журнала
+	/// Графическая панель управления СКЗИ с чтением данных из JSON, темной темой, кнопками окна и кастомным скроллбаром
 	/// </summary>
 	public class ControlPanelForm : Form
 	{
@@ -41,6 +41,8 @@ namespace CertHarvester
 
 		private const int WM_NCLBUTTONDOWN = 0xA1;
 		private const int HT_CAPTION = 0x2;
+		private const int EM_GETFIRSTVISIBLELINE = 0x00CE;
+		private const int EM_LINESCROLL = 0x00B6;
 
 		private AppConfig _currentConfig;
 		private List<CertificateRecord> _allCertificates;
@@ -50,25 +52,40 @@ namespace CertHarvester
 		private string _searchFilterQuery;
 		private CancellationTokenSource _scanCts;
 		private bool _isScanningActive;
+		private bool _isDarkTheme;
 
-		// UI компоненты шапки
+		// Элементы шапки окна и кнопок управления окном
 		private Panel _panelTopHeader;
 		private Label _labelAppTitle;
+		private Button _buttonThemeToggle;
+		private Panel _panelTabsContainer;
 		private Button _tabButtonScan;
 		private Button _tabButtonLogs;
 		private Button _tabButtonSettings;
+		private Button _buttonMinWindow;
+		private Button _buttonMaxWindow;
+		private Button _buttonCloseWindow;
 
-		// UI компоненты левого сайдбара
+		// Элементы левого сайдбара
 		private Panel _panelSidebar;
+		private Label _labelSidebarCompHeader;
+		private Label _labelSidebarDirsHeader;
+		private Label _labelSidebarDbHeader;
+		private Label _labelServerTitle;
+		private Label _labelDbTitle;
+		private Label _labelTableTitle;
+		private Label _labelAutoCreateTitle;
 		private Button _buttonAddComputer;
+		private Button _buttonAddDirectory;
 		private Panel _panelComputersContainer;
 		private Panel _panelDirectoriesContainer;
 		private TextBox _textSqlServer;
 		private TextBox _textSqlDatabase;
 		private TextBox _textSqlTable;
 		private CheckBox _checkAutoCreateTable;
+		private Button _buttonSaveDbSettings;
 
-		// UI компоненты главной правой области
+		// Элементы главной области
 		private Panel _panelMainContent;
 		private Label _labelMainHeader;
 		private Button _buttonStopScan;
@@ -78,28 +95,40 @@ namespace CertHarvester
 		// Карточки метрик (KPI)
 		private Panel _cardMetricTotal;
 		private Label _labelMetricTotalNumber;
+		private Label _labelMetricTotalTitle;
 		private Panel _cardMetricInserted;
 		private Label _labelMetricInsertedNumber;
+		private Label _labelMetricInsertedTitle;
 		private Panel _cardMetricUpdated;
 		private Label _labelMetricUpdatedNumber;
+		private Label _labelMetricUpdatedTitle;
 		private Panel _cardMetricProgress;
 		private Label _labelProgressSummary;
 		private Label _labelProgressPercent;
 		private Label _labelProgressCurrentNode;
+		private Panel _progressBarCustom;
 		private int _progressValue;
 
-		// Строка поиска и фильтрации
+		// Поиск и фильтрация
+		private Panel _panelSearchContainer;
+		private Label _labelSearchIcon;
 		private TextBox _textSearchBox;
 		private Button _buttonFilterLicense;
 
 		// Таблица сертификатов
 		private DataGridView _gridCertificates;
 
-		// Терминал журнала работы
+		// Темный терминал журнала работы и кастомный темный ползунок прокрутки
 		private Panel _panelTerminalCard;
+		private Label _labelTerminalTitle;
 		private RichTextBox _textTerminalLog;
+		private Panel _panelScrollTrack;
+		private Panel _panelScrollThumb;
+		private bool _isThumbDragging;
+		private int _dragStartY;
+		private int _thumbStartY;
 
-		// Конструктор инициализации формы графической панели управления
+		// Конструктор инициализации формы панели управления
 		public ControlPanelForm()
 		{
 			_allCertificates = new List<CertificateRecord>();
@@ -107,17 +136,20 @@ namespace CertHarvester
 			_networkNodes = new List<NetworkNodeItem>();
 			_filterOnlyWithLicense = false;
 			_searchFilterQuery = string.Empty;
-			_progressValue = 62;
+			_progressValue = 0;
+			_isDarkTheme = false;
+			_isThumbDragging = false;
 
 			this.SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
 			this.UpdateStyles();
 
 			InitializeComponentCustom();
-			LoadConfigurationAndMockData();
+			LoadConfigurationFromJsonFile();
+			ApplyTheme(_isDarkTheme);
 			RefreshCertificatesGrid();
 		}
 
-		// Инициализация структуры и внешнего вида окна панели управления
+		// Инициализация структуры и внешнего вида оконного интерфейса
 		private void InitializeComponentCustom()
 		{
 			this.Text = "Сбор данных о СКЗИ";
@@ -129,13 +161,13 @@ namespace CertHarvester
 			this.KeyPreview = true;
 			this.KeyDown += ControlPanelForm_KeyDown;
 
-			// 1. Верхняя панель заголовка окна
+			// 1. Верхняя панель заголовка окна с кнопками управления
 			CreateTopHeaderBar();
 
-			// 2. Левая панель настроек (Компьютеры, Каталоги, MSSQL)
+			// 2. Левый сайдбар настроек и добавления ресурсов
 			CreateLeftSidebar();
 
-			// 3. Главная область (Заголовок, Кнопки, Метрики, Поиск, Таблица, Журнал)
+			// 3. Главная область управления, метрик, таблицы и терминала
 			CreateMainContentArea();
 		}
 
@@ -148,7 +180,7 @@ namespace CertHarvester
 			}
 		}
 
-		// Создание верхней панели с центрированным заголовком и табами справа
+		// Создание верхней панели с центрированным заголовком, кнопкой темы, вкладками и кнопками окна
 		private void CreateTopHeaderBar()
 		{
 			_panelTopHeader = new Panel();
@@ -164,16 +196,53 @@ namespace CertHarvester
 			_labelAppTitle.AutoSize = true;
 			_labelAppTitle.MouseDown += Header_MouseDown;
 
+			// Кнопки управления окном справа сверху (Свернуть, Развернуть, Закрыть)
+			_buttonMinWindow = new Button();
+			_buttonMinWindow.Text = "—";
+			_buttonMinWindow.Size = new Size(36, 32);
+			_buttonMinWindow.Location = new Point(this.ClientSize.Width - 118, 10);
+			_buttonMinWindow.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+			_buttonMinWindow.FlatStyle = FlatStyle.Flat;
+			_buttonMinWindow.FlatAppearance.BorderSize = 0;
+			_buttonMinWindow.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+			_buttonMinWindow.Cursor = Cursors.Hand;
+			_buttonMinWindow.Click += (s, e) => { this.WindowState = FormWindowState.Minimized; };
+
+			_buttonMaxWindow = new Button();
+			_buttonMaxWindow.Text = "🗖";
+			_buttonMaxWindow.Size = new Size(36, 32);
+			_buttonMaxWindow.Location = new Point(this.ClientSize.Width - 80, 10);
+			_buttonMaxWindow.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+			_buttonMaxWindow.FlatStyle = FlatStyle.Flat;
+			_buttonMaxWindow.FlatAppearance.BorderSize = 0;
+			_buttonMaxWindow.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+			_buttonMaxWindow.Cursor = Cursors.Hand;
+			_buttonMaxWindow.Click += ButtonMaxWindow_Click;
+
+			_buttonCloseWindow = new Button();
+			_buttonCloseWindow.Text = "✕";
+			_buttonCloseWindow.Size = new Size(36, 32);
+			_buttonCloseWindow.Location = new Point(this.ClientSize.Width - 42, 10);
+			_buttonCloseWindow.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+			_buttonCloseWindow.FlatStyle = FlatStyle.Flat;
+			_buttonCloseWindow.FlatAppearance.BorderSize = 0;
+			_buttonCloseWindow.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+			_buttonCloseWindow.Cursor = Cursors.Hand;
+			_buttonCloseWindow.MouseEnter += (s, e) => { _buttonCloseWindow.BackColor = Color.FromArgb(239, 68, 68); _buttonCloseWindow.ForeColor = Color.White; };
+			_buttonCloseWindow.MouseLeave += (s, e) => { ApplyThemeToWindowButtons(); };
+			_buttonCloseWindow.Click += (s, e) => { this.Close(); };
+
 			// Табы справа: Сканирование, Журнал, Настройки
-			Panel panelTabs = new Panel();
-			panelTabs.Size = new Size(270, 32);
-			panelTabs.Location = new Point(this.ClientSize.Width - 290, 10);
-			panelTabs.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-			panelTabs.BackColor = Color.FromArgb(235, 238, 242);
-			panelTabs.Paint += (s, pe) =>
+			_panelTabsContainer = new Panel();
+			_panelTabsContainer.Size = new Size(270, 32);
+			_panelTabsContainer.Location = new Point(this.ClientSize.Width - 400, 10);
+			_panelTabsContainer.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+			_panelTabsContainer.BackColor = Color.FromArgb(235, 238, 242);
+			_panelTabsContainer.Paint += (s, pe) =>
 			{
-				using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, panelTabs.Width - 1, panelTabs.Height - 1), 6))
-				using (Pen pen = new Pen(Color.FromArgb(220, 224, 230), 1))
+				Color borderColor = _isDarkTheme ? Color.FromArgb(55, 65, 81) : Color.FromArgb(220, 224, 230);
+				using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, _panelTabsContainer.Width - 1, _panelTabsContainer.Height - 1), 6))
+				using (Pen pen = new Pen(borderColor, 1))
 				{
 					pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 					pe.Graphics.DrawPath(pen, path);
@@ -188,14 +257,30 @@ namespace CertHarvester
 			_tabButtonLogs.Click += (s, e) => SwitchTab("logs");
 			_tabButtonSettings.Click += (s, e) => SwitchTab("settings");
 
-			panelTabs.Controls.Add(_tabButtonScan);
-			panelTabs.Controls.Add(_tabButtonLogs);
-			panelTabs.Controls.Add(_tabButtonSettings);
+			_panelTabsContainer.Controls.Add(_tabButtonScan);
+			_panelTabsContainer.Controls.Add(_tabButtonLogs);
+			_panelTabsContainer.Controls.Add(_tabButtonSettings);
+
+			// Выразительная кнопка переключения темы оформления
+			_buttonThemeToggle = new Button();
+			_buttonThemeToggle.Text = "🌙  Тёмная тема";
+			_buttonThemeToggle.Size = new Size(136, 32);
+			_buttonThemeToggle.Location = new Point(this.ClientSize.Width - 548, 10);
+			_buttonThemeToggle.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+			_buttonThemeToggle.FlatStyle = FlatStyle.Flat;
+			_buttonThemeToggle.FlatAppearance.BorderSize = 0;
+			_buttonThemeToggle.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+			_buttonThemeToggle.Cursor = Cursors.Hand;
+			_buttonThemeToggle.Click += ButtonThemeToggle_Click;
 
 			_panelTopHeader.Controls.Add(_labelAppTitle);
-			_panelTopHeader.Controls.Add(panelTabs);
+			_panelTopHeader.Controls.Add(_buttonThemeToggle);
+			_panelTopHeader.Controls.Add(_panelTabsContainer);
+			_panelTopHeader.Controls.Add(_buttonMinWindow);
+			_panelTopHeader.Controls.Add(_buttonMaxWindow);
+			_panelTopHeader.Controls.Add(_buttonCloseWindow);
 
-			// Центрирование заголовка при изменении размера
+			// Центрирование заголовка при изменении размера окна
 			_panelTopHeader.Resize += (s, e) =>
 			{
 				_labelAppTitle.Location = new Point((_panelTopHeader.Width - _labelAppTitle.Width) / 2, 16);
@@ -204,7 +289,22 @@ namespace CertHarvester
 			this.Controls.Add(_panelTopHeader);
 		}
 
-		// Создание кнопки вкладки в верхней панели
+		// Обработчик кнопки максимизации / восстановления нормального размера окна
+		private void ButtonMaxWindow_Click(object sender, EventArgs e)
+		{
+			if (this.WindowState == FormWindowState.Maximized)
+			{
+				this.WindowState = FormWindowState.Normal;
+				_buttonMaxWindow.Text = "🗖";
+			}
+			else
+			{
+				this.WindowState = FormWindowState.Maximized;
+				_buttonMaxWindow.Text = "🗗";
+			}
+		}
+
+		// Создание кнопки вкладки в верхней панели управления
 		private Button CreateTabButton(string text, int x, int y, int width, bool isActive)
 		{
 			Button btn = new Button();
@@ -223,13 +323,20 @@ namespace CertHarvester
 		// Переключение отображаемой вкладки верхней панели
 		private void SwitchTab(string tabName)
 		{
-			_tabButtonScan.BackColor = (tabName == "scan") ? Color.White : Color.Transparent;
+			Color activeBg = _isDarkTheme ? Color.FromArgb(55, 65, 81) : Color.White;
+			Color activeText = _isDarkTheme ? Color.White : Color.FromArgb(17, 24, 39);
+			Color inactiveText = _isDarkTheme ? Color.FromArgb(156, 163, 175) : Color.FromArgb(107, 114, 128);
+
+			_tabButtonScan.BackColor = (tabName == "scan") ? activeBg : Color.Transparent;
+			_tabButtonScan.ForeColor = (tabName == "scan") ? activeText : inactiveText;
 			_tabButtonScan.Font = new Font("Segoe UI", 8.5F, (tabName == "scan") ? FontStyle.Bold : FontStyle.Regular);
 
-			_tabButtonLogs.BackColor = (tabName == "logs") ? Color.White : Color.Transparent;
+			_tabButtonLogs.BackColor = (tabName == "logs") ? activeBg : Color.Transparent;
+			_tabButtonLogs.ForeColor = (tabName == "logs") ? activeText : inactiveText;
 			_tabButtonLogs.Font = new Font("Segoe UI", 8.5F, (tabName == "logs") ? FontStyle.Bold : FontStyle.Regular);
 
-			_tabButtonSettings.BackColor = (tabName == "settings") ? Color.White : Color.Transparent;
+			_tabButtonSettings.BackColor = (tabName == "settings") ? activeBg : Color.Transparent;
+			_tabButtonSettings.ForeColor = (tabName == "settings") ? activeText : inactiveText;
 			_tabButtonSettings.Font = new Font("Segoe UI", 8.5F, (tabName == "settings") ? FontStyle.Bold : FontStyle.Regular);
 
 			if (tabName == "logs")
@@ -242,6 +349,148 @@ namespace CertHarvester
 			}
 		}
 
+		// Обработчик переключения между светлой и темной темами оформления
+		private void ButtonThemeToggle_Click(object sender, EventArgs e)
+		{
+			_isDarkTheme = !_isDarkTheme;
+			_currentConfig.IsDarkTheme = _isDarkTheme;
+			ConfigManager.SaveConfig(_currentConfig);
+
+			ApplyTheme(_isDarkTheme);
+			RefreshCertificatesGrid();
+		}
+
+		// Настройка внешнего вида кнопок закрытия и сворачивания окна в зависимости от темы
+		private void ApplyThemeToWindowButtons()
+		{
+			Color btnText = _isDarkTheme ? Color.FromArgb(156, 163, 175) : Color.FromArgb(75, 85, 99);
+			Color btnBg = Color.Transparent;
+
+			_buttonMinWindow.BackColor = btnBg;
+			_buttonMinWindow.ForeColor = btnText;
+
+			_buttonMaxWindow.BackColor = btnBg;
+			_buttonMaxWindow.ForeColor = btnText;
+
+			_buttonCloseWindow.BackColor = btnBg;
+			_buttonCloseWindow.ForeColor = btnText;
+		}
+
+		// Применение темы оформления ко всем элементам пользовательского интерфейса
+		private void ApplyTheme(bool isDark)
+		{
+			Color formBg = isDark ? Color.FromArgb(17, 24, 39) : Color.FromArgb(244, 246, 249);
+			Color cardBg = isDark ? Color.FromArgb(31, 41, 55) : Color.White;
+			Color cardBorder = isDark ? Color.FromArgb(55, 65, 81) : Color.FromArgb(229, 231, 235);
+			Color textPrimary = isDark ? Color.FromArgb(243, 244, 246) : Color.FromArgb(17, 24, 39);
+			Color textSecondary = isDark ? Color.FromArgb(156, 163, 175) : Color.FromArgb(107, 114, 128);
+			Color inputBg = isDark ? Color.FromArgb(17, 24, 39) : Color.FromArgb(249, 250, 251);
+
+			// Форма и шапка
+			this.BackColor = formBg;
+			_panelTopHeader.BackColor = formBg;
+			_labelAppTitle.ForeColor = textPrimary;
+
+			_buttonThemeToggle.Text = isDark ? "☀️  Светлая тема" : "🌙  Тёмная тема";
+			_buttonThemeToggle.BackColor = isDark ? Color.FromArgb(55, 65, 81) : Color.FromArgb(235, 238, 242);
+			_buttonThemeToggle.ForeColor = textPrimary;
+
+			_panelTabsContainer.BackColor = isDark ? Color.FromArgb(17, 24, 39) : Color.FromArgb(235, 238, 242);
+			SwitchTab("scan");
+			ApplyThemeToWindowButtons();
+
+			// Сайдбар
+			_panelSidebar.BackColor = cardBg;
+			_labelSidebarCompHeader.ForeColor = textSecondary;
+			_labelSidebarDirsHeader.ForeColor = textSecondary;
+			_labelSidebarDbHeader.ForeColor = textSecondary;
+			_labelServerTitle.ForeColor = textPrimary;
+			_labelDbTitle.ForeColor = textPrimary;
+			_labelTableTitle.ForeColor = textPrimary;
+			_labelAutoCreateTitle.ForeColor = textPrimary;
+
+			_textSqlServer.BackColor = inputBg;
+			_textSqlServer.ForeColor = textPrimary;
+			_textSqlDatabase.BackColor = inputBg;
+			_textSqlDatabase.ForeColor = textPrimary;
+			_textSqlTable.BackColor = inputBg;
+			_textSqlTable.ForeColor = textPrimary;
+
+			_buttonSaveDbSettings.BackColor = isDark ? Color.FromArgb(55, 65, 81) : Color.FromArgb(243, 244, 246);
+			_buttonSaveDbSettings.ForeColor = textPrimary;
+
+			// Главная панель
+			_labelMainHeader.ForeColor = textPrimary;
+
+			_buttonStopScan.BackColor = isDark ? Color.FromArgb(69, 26, 26) : Color.FromArgb(254, 242, 242);
+			_buttonStopScan.ForeColor = isDark ? Color.FromArgb(248, 113, 113) : Color.FromArgb(239, 68, 68);
+
+			_buttonExportDb.BackColor = isDark ? Color.FromArgb(30, 58, 138) : Color.FromArgb(239, 246, 255);
+			_buttonExportDb.ForeColor = isDark ? Color.FromArgb(147, 197, 253) : Color.FromArgb(37, 99, 235);
+
+			// Карточки показателей
+			_cardMetricTotal.BackColor = cardBg;
+			_labelMetricTotalNumber.ForeColor = textPrimary;
+			_labelMetricTotalTitle.ForeColor = textSecondary;
+
+			_cardMetricInserted.BackColor = cardBg;
+			_labelMetricInsertedNumber.ForeColor = isDark ? Color.FromArgb(52, 211, 153) : Color.FromArgb(16, 185, 129);
+			_labelMetricInsertedTitle.ForeColor = textSecondary;
+
+			_cardMetricUpdated.BackColor = cardBg;
+			_labelMetricUpdatedNumber.ForeColor = isDark ? Color.FromArgb(96, 165, 250) : Color.FromArgb(59, 130, 246);
+			_labelMetricUpdatedTitle.ForeColor = textSecondary;
+
+			_cardMetricProgress.BackColor = cardBg;
+			_labelProgressSummary.ForeColor = textPrimary;
+			_labelProgressPercent.ForeColor = textSecondary;
+			_labelProgressCurrentNode.ForeColor = textSecondary;
+			_progressBarCustom.BackColor = isDark ? Color.FromArgb(55, 65, 81) : Color.FromArgb(229, 231, 235);
+
+			// Поиск и фильтрация
+			_panelSearchContainer.BackColor = cardBg;
+			_labelSearchIcon.ForeColor = textSecondary;
+			_textSearchBox.BackColor = cardBg;
+			_textSearchBox.ForeColor = textPrimary;
+
+			if (_filterOnlyWithLicense == false)
+			{
+				_buttonFilterLicense.BackColor = isDark ? Color.FromArgb(30, 58, 138) : Color.FromArgb(239, 246, 255);
+				_buttonFilterLicense.ForeColor = isDark ? Color.FromArgb(147, 197, 253) : Color.FromArgb(37, 99, 235);
+			}
+
+			// Таблица DataGridView
+			_gridCertificates.BackgroundColor = cardBg;
+			_gridCertificates.GridColor = cardBorder;
+
+			_gridCertificates.ColumnHeadersDefaultCellStyle.BackColor = cardBg;
+			_gridCertificates.ColumnHeadersDefaultCellStyle.ForeColor = textSecondary;
+
+			_gridCertificates.DefaultCellStyle.BackColor = cardBg;
+			_gridCertificates.DefaultCellStyle.ForeColor = textPrimary;
+			_gridCertificates.DefaultCellStyle.SelectionBackColor = isDark ? Color.FromArgb(55, 65, 81) : Color.FromArgb(240, 249, 255);
+			_gridCertificates.DefaultCellStyle.SelectionForeColor = isDark ? Color.White : Color.FromArgb(17, 24, 39);
+
+			// Терминал журнала: монолитный черный фон без белых полос
+			Color terminalBg = isDark ? Color.FromArgb(11, 15, 25) : Color.FromArgb(22, 24, 29);
+			Color scrollTrackBg = isDark ? Color.FromArgb(20, 24, 34) : Color.FromArgb(30, 34, 42);
+			Color scrollThumbBg = isDark ? Color.FromArgb(156, 163, 175) : Color.FromArgb(107, 114, 128);
+
+			_panelTerminalCard.BackColor = terminalBg;
+			_textTerminalLog.BackColor = terminalBg;
+			_labelTerminalTitle.ForeColor = textSecondary;
+
+			_panelScrollTrack.BackColor = scrollTrackBg;
+			_panelScrollThumb.BackColor = scrollThumbBg;
+
+			// Отрисовка списков узлов и директорий
+			RenderComputersList();
+			RenderDirectoriesList();
+			UpdateScrollBarThumb();
+
+			this.Invalidate(true);
+		}
+
 		// Перемещение формы при зажатии левой кнопки мыши на шапке окна
 		private void Header_MouseDown(object sender, MouseEventArgs e)
 		{
@@ -252,7 +501,7 @@ namespace CertHarvester
 			}
 		}
 
-		// Создание левого сайдбара с настройками и списками ресурсов
+		// Создание левого сайдбара с возможностью добавления компьютеров и директорий
 		private void CreateLeftSidebar()
 		{
 			_panelSidebar = new Panel();
@@ -263,148 +512,177 @@ namespace CertHarvester
 			_panelSidebar.Paint += (s, pe) =>
 			{
 				pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+				Color borderColor = _isDarkTheme ? Color.FromArgb(55, 65, 81) : Color.FromArgb(229, 231, 235);
 				using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, _panelSidebar.Width - 1, _panelSidebar.Height - 1), 12))
-				using (Pen pen = new Pen(Color.FromArgb(229, 231, 235), 1))
+				using (Pen pen = new Pen(borderColor, 1))
 				{
 					pe.Graphics.DrawPath(pen, path);
 				}
 			};
 
-			int currentY = 16;
+			int currentY = 14;
 
 			// Блок 1: Компьютеры в сети
-			Label labelCompHeader = new Label();
-			labelCompHeader.Text = "Компьютеры в сети";
-			labelCompHeader.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
-			labelCompHeader.ForeColor = Color.FromArgb(107, 114, 128);
-			labelCompHeader.Location = new Point(16, currentY);
-			labelCompHeader.AutoSize = true;
-			_panelSidebar.Controls.Add(labelCompHeader);
-			currentY = currentY + 22;
+			_labelSidebarCompHeader = new Label();
+			_labelSidebarCompHeader.Text = "Компьютеры в сети";
+			_labelSidebarCompHeader.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+			_labelSidebarCompHeader.ForeColor = Color.FromArgb(107, 114, 128);
+			_labelSidebarCompHeader.Location = new Point(16, currentY);
+			_labelSidebarCompHeader.AutoSize = true;
+			_panelSidebar.Controls.Add(_labelSidebarCompHeader);
+			currentY = currentY + 20;
 
 			_buttonAddComputer = new Button();
 			_buttonAddComputer.Text = "+   Добавить компьютер...";
 			_buttonAddComputer.Location = new Point(16, currentY);
-			_buttonAddComputer.Size = new Size(244, 34);
+			_buttonAddComputer.Size = new Size(244, 30);
 			_buttonAddComputer.FlatStyle = FlatStyle.Flat;
 			_buttonAddComputer.FlatAppearance.BorderSize = 0;
 			_buttonAddComputer.BackColor = Color.FromArgb(2, 132, 199);
 			_buttonAddComputer.ForeColor = Color.White;
-			_buttonAddComputer.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+			_buttonAddComputer.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
 			_buttonAddComputer.Cursor = Cursors.Hand;
 			_buttonAddComputer.Click += ButtonAddComputer_Click;
 			_panelSidebar.Controls.Add(_buttonAddComputer);
-			currentY = currentY + 42;
+			currentY = currentY + 36;
 
 			_panelComputersContainer = new Panel();
 			_panelComputersContainer.Location = new Point(12, currentY);
-			_panelComputersContainer.Size = new Size(252, 220);
+			_panelComputersContainer.Size = new Size(252, 180);
 			_panelComputersContainer.AutoScroll = true;
 			_panelSidebar.Controls.Add(_panelComputersContainer);
-			currentY = currentY + 230;
+			currentY = currentY + 190;
 
 			// Блок 2: Директории из конфигурации
-			Label labelDirsHeader = new Label();
-			labelDirsHeader.Text = "Директории из конфигурации";
-			labelDirsHeader.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
-			labelDirsHeader.ForeColor = Color.FromArgb(107, 114, 128);
-			labelDirsHeader.Location = new Point(16, currentY);
-			labelDirsHeader.AutoSize = true;
-			_panelSidebar.Controls.Add(labelDirsHeader);
-			currentY = currentY + 22;
+			_labelSidebarDirsHeader = new Label();
+			_labelSidebarDirsHeader.Text = "Директории из конфигурации";
+			_labelSidebarDirsHeader.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+			_labelSidebarDirsHeader.ForeColor = Color.FromArgb(107, 114, 128);
+			_labelSidebarDirsHeader.Location = new Point(16, currentY);
+			_labelSidebarDirsHeader.AutoSize = true;
+			_panelSidebar.Controls.Add(_labelSidebarDirsHeader);
+			currentY = currentY + 20;
+
+			_buttonAddDirectory = new Button();
+			_buttonAddDirectory.Text = "+   Добавить директорию...";
+			_buttonAddDirectory.Location = new Point(16, currentY);
+			_buttonAddDirectory.Size = new Size(244, 30);
+			_buttonAddDirectory.FlatStyle = FlatStyle.Flat;
+			_buttonAddDirectory.FlatAppearance.BorderSize = 0;
+			_buttonAddDirectory.BackColor = Color.FromArgb(2, 132, 199);
+			_buttonAddDirectory.ForeColor = Color.White;
+			_buttonAddDirectory.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+			_buttonAddDirectory.Cursor = Cursors.Hand;
+			_buttonAddDirectory.Click += ButtonAddDirectory_Click;
+			_panelSidebar.Controls.Add(_buttonAddDirectory);
+			currentY = currentY + 36;
 
 			_panelDirectoriesContainer = new Panel();
 			_panelDirectoriesContainer.Location = new Point(12, currentY);
-			_panelDirectoriesContainer.Size = new Size(252, 130);
+			_panelDirectoriesContainer.Size = new Size(252, 120);
 			_panelDirectoriesContainer.AutoScroll = true;
 			_panelSidebar.Controls.Add(_panelDirectoriesContainer);
-			currentY = currentY + 140;
+			currentY = currentY + 128;
 
 			// Блок 3: База данных MSSQL
-			Label labelDbHeader = new Label();
-			labelDbHeader.Text = "База данных MSSQL";
-			labelDbHeader.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
-			labelDbHeader.ForeColor = Color.FromArgb(107, 114, 128);
-			labelDbHeader.Location = new Point(16, currentY);
-			labelDbHeader.AutoSize = true;
-			_panelSidebar.Controls.Add(labelDbHeader);
-			currentY = currentY + 22;
+			_labelSidebarDbHeader = new Label();
+			_labelSidebarDbHeader.Text = "База данных MSSQL";
+			_labelSidebarDbHeader.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+			_labelSidebarDbHeader.ForeColor = Color.FromArgb(107, 114, 128);
+			_labelSidebarDbHeader.Location = new Point(16, currentY);
+			_labelSidebarDbHeader.AutoSize = true;
+			_panelSidebar.Controls.Add(_labelSidebarDbHeader);
+			currentY = currentY + 20;
 
 			// Сервер
-			Label labelServer = new Label();
-			labelServer.Text = "Сервер";
-			labelServer.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
-			labelServer.ForeColor = Color.FromArgb(55, 65, 81);
-			labelServer.Location = new Point(16, currentY);
-			labelServer.Size = new Size(60, 20);
+			_labelServerTitle = new Label();
+			_labelServerTitle.Text = "Сервер";
+			_labelServerTitle.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
+			_labelServerTitle.ForeColor = Color.FromArgb(55, 65, 81);
+			_labelServerTitle.Location = new Point(16, currentY);
+			_labelServerTitle.Size = new Size(60, 20);
 
 			_textSqlServer = new TextBox();
-			_textSqlServer.Text = @"SQL-SRV\MSSQL2019";
-			_textSqlServer.Location = new Point(90, currentY - 2);
-			_textSqlServer.Size = new Size(170, 22);
+			_textSqlServer.Text = "localhost";
+			_textSqlServer.Location = new Point(80, currentY - 2);
+			_textSqlServer.Size = new Size(180, 22);
 			_textSqlServer.BorderStyle = BorderStyle.None;
 			_textSqlServer.BackColor = Color.FromArgb(249, 250, 251);
 			_textSqlServer.TextAlign = HorizontalAlignment.Right;
 			_textSqlServer.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
-			_panelSidebar.Controls.Add(labelServer);
+			_panelSidebar.Controls.Add(_labelServerTitle);
 			_panelSidebar.Controls.Add(_textSqlServer);
-			currentY = currentY + 26;
+			currentY = currentY + 24;
 
 			// База
-			Label labelDb = new Label();
-			labelDb.Text = "База";
-			labelDb.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
-			labelDb.ForeColor = Color.FromArgb(55, 65, 81);
-			labelDb.Location = new Point(16, currentY);
-			labelDb.Size = new Size(60, 20);
+			_labelDbTitle = new Label();
+			_labelDbTitle.Text = "База";
+			_labelDbTitle.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
+			_labelDbTitle.ForeColor = Color.FromArgb(55, 65, 81);
+			_labelDbTitle.Location = new Point(16, currentY);
+			_labelDbTitle.Size = new Size(60, 20);
 
 			_textSqlDatabase = new TextBox();
-			_textSqlDatabase.Text = "CryptoInventory";
-			_textSqlDatabase.Location = new Point(90, currentY - 2);
-			_textSqlDatabase.Size = new Size(170, 22);
+			_textSqlDatabase.Text = "CertHarvesterDB";
+			_textSqlDatabase.Location = new Point(80, currentY - 2);
+			_textSqlDatabase.Size = new Size(180, 22);
 			_textSqlDatabase.BorderStyle = BorderStyle.None;
 			_textSqlDatabase.BackColor = Color.FromArgb(249, 250, 251);
 			_textSqlDatabase.TextAlign = HorizontalAlignment.Right;
 			_textSqlDatabase.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
-			_panelSidebar.Controls.Add(labelDb);
+			_panelSidebar.Controls.Add(_labelDbTitle);
 			_panelSidebar.Controls.Add(_textSqlDatabase);
-			currentY = currentY + 26;
+			currentY = currentY + 24;
 
 			// Таблица
-			Label labelTable = new Label();
-			labelTable.Text = "Таблица";
-			labelTable.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
-			labelTable.ForeColor = Color.FromArgb(55, 65, 81);
-			labelTable.Location = new Point(16, currentY);
-			labelTable.Size = new Size(60, 20);
+			_labelTableTitle = new Label();
+			_labelTableTitle.Text = "Таблица";
+			_labelTableTitle.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
+			_labelTableTitle.ForeColor = Color.FromArgb(55, 65, 81);
+			_labelTableTitle.Location = new Point(16, currentY);
+			_labelTableTitle.Size = new Size(60, 20);
 
 			_textSqlTable = new TextBox();
 			_textSqlTable.Text = "Certificates";
-			_textSqlTable.Location = new Point(90, currentY - 2);
-			_textSqlTable.Size = new Size(170, 22);
+			_textSqlTable.Location = new Point(80, currentY - 2);
+			_textSqlTable.Size = new Size(180, 22);
 			_textSqlTable.BorderStyle = BorderStyle.None;
 			_textSqlTable.BackColor = Color.FromArgb(249, 250, 251);
 			_textSqlTable.TextAlign = HorizontalAlignment.Right;
 			_textSqlTable.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
-			_panelSidebar.Controls.Add(labelTable);
+			_panelSidebar.Controls.Add(_labelTableTitle);
 			_panelSidebar.Controls.Add(_textSqlTable);
-			currentY = currentY + 34;
+			currentY = currentY + 30;
 
 			// Переключатель "Создавать таблицу при отсутствии"
-			Label labelAutoCreate = new Label();
-			labelAutoCreate.Text = "Создавать таблицу при\nотсутствии";
-			labelAutoCreate.Font = new Font("Segoe UI", 8F, FontStyle.Regular);
-			labelAutoCreate.ForeColor = Color.FromArgb(31, 41, 55);
-			labelAutoCreate.Location = new Point(16, currentY);
-			labelAutoCreate.Size = new Size(180, 36);
+			_labelAutoCreateTitle = new Label();
+			_labelAutoCreateTitle.Text = "Создавать таблицу при\nотсутствии";
+			_labelAutoCreateTitle.Font = new Font("Segoe UI", 8F, FontStyle.Regular);
+			_labelAutoCreateTitle.ForeColor = Color.FromArgb(31, 41, 55);
+			_labelAutoCreateTitle.Location = new Point(16, currentY);
+			_labelAutoCreateTitle.Size = new Size(180, 34);
 
 			_checkAutoCreateTable = new CheckBox();
 			_checkAutoCreateTable.Checked = true;
 			_checkAutoCreateTable.Location = new Point(228, currentY + 4);
 			_checkAutoCreateTable.Size = new Size(32, 24);
 			_checkAutoCreateTable.Cursor = Cursors.Hand;
-			_panelSidebar.Controls.Add(labelAutoCreate);
+			_panelSidebar.Controls.Add(_labelAutoCreateTitle);
 			_panelSidebar.Controls.Add(_checkAutoCreateTable);
+			currentY = currentY + 38;
+
+			// Кнопка сохранения параметров БД
+			_buttonSaveDbSettings = new Button();
+			_buttonSaveDbSettings.Text = "Сохранить параметры БД";
+			_buttonSaveDbSettings.Location = new Point(16, currentY);
+			_buttonSaveDbSettings.Size = new Size(244, 28);
+			_buttonSaveDbSettings.FlatStyle = FlatStyle.Flat;
+			_buttonSaveDbSettings.FlatAppearance.BorderSize = 0;
+			_buttonSaveDbSettings.BackColor = Color.FromArgb(243, 244, 246);
+			_buttonSaveDbSettings.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
+			_buttonSaveDbSettings.Cursor = Cursors.Hand;
+			_buttonSaveDbSettings.Click += ButtonSaveDbSettings_Click;
+			_panelSidebar.Controls.Add(_buttonSaveDbSettings);
 
 			this.Controls.Add(_panelSidebar);
 		}
@@ -485,7 +763,7 @@ namespace CertHarvester
 			CreateCertificatesTable(currentY);
 			currentY = currentY + 276;
 
-			// 5. Нижняя карточка темного терминала "Журнал работы"
+			// 5. Нижняя карточка темного терминала "Журнал работы" с кастомным темным ползунком
 			CreateTerminalCard(currentY);
 
 			this.Controls.Add(_panelMainContent);
@@ -501,92 +779,92 @@ namespace CertHarvester
 			// Карточка 1: Найдено
 			_cardMetricTotal = CreateBaseCard(0, startY, cardWidth, cardHeight);
 			_labelMetricTotalNumber = new Label();
-			_labelMetricTotalNumber.Text = "128";
+			_labelMetricTotalNumber.Text = "0";
 			_labelMetricTotalNumber.Font = new Font("Segoe UI", 20F, FontStyle.Bold);
 			_labelMetricTotalNumber.ForeColor = Color.FromArgb(17, 24, 39);
 			_labelMetricTotalNumber.Location = new Point(14, 10);
 			_labelMetricTotalNumber.AutoSize = true;
 
-			Label labelTotalTitle = new Label();
-			labelTotalTitle.Text = "сертификатов найдено";
-			labelTotalTitle.Font = new Font("Segoe UI", 8F, FontStyle.Regular);
-			labelTotalTitle.ForeColor = Color.FromArgb(107, 114, 128);
-			labelTotalTitle.Location = new Point(16, 48);
-			labelTotalTitle.AutoSize = true;
+			_labelMetricTotalTitle = new Label();
+			_labelMetricTotalTitle.Text = "сертификатов найдено";
+			_labelMetricTotalTitle.Font = new Font("Segoe UI", 8F, FontStyle.Regular);
+			_labelMetricTotalTitle.ForeColor = Color.FromArgb(107, 114, 128);
+			_labelMetricTotalTitle.Location = new Point(16, 48);
+			_labelMetricTotalTitle.AutoSize = true;
 
 			_cardMetricTotal.Controls.Add(_labelMetricTotalNumber);
-			_cardMetricTotal.Controls.Add(labelTotalTitle);
+			_cardMetricTotal.Controls.Add(_labelMetricTotalTitle);
 			_panelMainContent.Controls.Add(_cardMetricTotal);
 
 			// Карточка 2: Добавлено
 			_cardMetricInserted = CreateBaseCard(cardWidth + spacing, startY, cardWidth, cardHeight);
 			_labelMetricInsertedNumber = new Label();
-			_labelMetricInsertedNumber.Text = "9";
+			_labelMetricInsertedNumber.Text = "0";
 			_labelMetricInsertedNumber.Font = new Font("Segoe UI", 20F, FontStyle.Bold);
 			_labelMetricInsertedNumber.ForeColor = Color.FromArgb(16, 185, 129);
 			_labelMetricInsertedNumber.Location = new Point(14, 10);
 			_labelMetricInsertedNumber.AutoSize = true;
 
-			Label labelInsertedTitle = new Label();
-			labelInsertedTitle.Text = "добавлено в таблицу";
-			labelInsertedTitle.Font = new Font("Segoe UI", 8F, FontStyle.Regular);
-			labelInsertedTitle.ForeColor = Color.FromArgb(107, 114, 128);
-			labelInsertedTitle.Location = new Point(16, 48);
-			labelInsertedTitle.AutoSize = true;
+			_labelMetricInsertedTitle = new Label();
+			_labelMetricInsertedTitle.Text = "добавлено в таблицу";
+			_labelMetricInsertedTitle.Font = new Font("Segoe UI", 8F, FontStyle.Regular);
+			_labelMetricInsertedTitle.ForeColor = Color.FromArgb(107, 114, 128);
+			_labelMetricInsertedTitle.Location = new Point(16, 48);
+			_labelMetricInsertedTitle.AutoSize = true;
 
 			_cardMetricInserted.Controls.Add(_labelMetricInsertedNumber);
-			_cardMetricInserted.Controls.Add(labelInsertedTitle);
+			_cardMetricInserted.Controls.Add(_labelMetricInsertedTitle);
 			_panelMainContent.Controls.Add(_cardMetricInserted);
 
 			// Карточка 3: Обновлено
 			_cardMetricUpdated = CreateBaseCard((cardWidth + spacing) * 2, startY, cardWidth, cardHeight);
 			_labelMetricUpdatedNumber = new Label();
-			_labelMetricUpdatedNumber.Text = "3";
+			_labelMetricUpdatedNumber.Text = "0";
 			_labelMetricUpdatedNumber.Font = new Font("Segoe UI", 20F, FontStyle.Bold);
 			_labelMetricUpdatedNumber.ForeColor = Color.FromArgb(59, 130, 246);
 			_labelMetricUpdatedNumber.Location = new Point(14, 10);
 			_labelMetricUpdatedNumber.AutoSize = true;
 
-			Label labelUpdatedTitle = new Label();
-			labelUpdatedTitle.Text = "обновлено (без дублей)";
-			labelUpdatedTitle.Font = new Font("Segoe UI", 8F, FontStyle.Regular);
-			labelUpdatedTitle.ForeColor = Color.FromArgb(107, 114, 128);
-			labelUpdatedTitle.Location = new Point(16, 48);
-			labelUpdatedTitle.AutoSize = true;
+			_labelMetricUpdatedTitle = new Label();
+			_labelMetricUpdatedTitle.Text = "обновлено (без дублей)";
+			_labelMetricUpdatedTitle.Font = new Font("Segoe UI", 8F, FontStyle.Regular);
+			_labelMetricUpdatedTitle.ForeColor = Color.FromArgb(107, 114, 128);
+			_labelMetricUpdatedTitle.Location = new Point(16, 48);
+			_labelMetricUpdatedTitle.AutoSize = true;
 
 			_cardMetricUpdated.Controls.Add(_labelMetricUpdatedNumber);
-			_cardMetricUpdated.Controls.Add(labelUpdatedTitle);
+			_cardMetricUpdated.Controls.Add(_labelMetricUpdatedTitle);
 			_panelMainContent.Controls.Add(_cardMetricUpdated);
 
 			// Карточка 4: Прогресс сканирования ПК
 			_cardMetricProgress = CreateBaseCard((cardWidth + spacing) * 3, startY, cardWidth, cardHeight);
 
 			_labelProgressSummary = new Label();
-			_labelProgressSummary.Text = "3 из 5 ПК";
+			_labelProgressSummary.Text = "0 из 0 ПК";
 			_labelProgressSummary.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
 			_labelProgressSummary.ForeColor = Color.FromArgb(17, 24, 39);
 			_labelProgressSummary.Location = new Point(14, 10);
 			_labelProgressSummary.AutoSize = true;
 
 			_labelProgressPercent = new Label();
-			_labelProgressPercent.Text = "62%";
+			_labelProgressPercent.Text = "0%";
 			_labelProgressPercent.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
 			_labelProgressPercent.ForeColor = Color.FromArgb(107, 114, 128);
 			_labelProgressPercent.Location = new Point(175, 10);
 			_labelProgressPercent.AutoSize = true;
 
-			Panel progressBarCustom = new Panel();
-			progressBarCustom.Location = new Point(16, 36);
-			progressBarCustom.Size = new Size(188, 8);
-			progressBarCustom.BackColor = Color.FromArgb(229, 231, 235);
-			progressBarCustom.Paint += (s, pe) =>
+			_progressBarCustom = new Panel();
+			_progressBarCustom.Location = new Point(16, 36);
+			_progressBarCustom.Size = new Size(188, 8);
+			_progressBarCustom.BackColor = Color.FromArgb(229, 231, 235);
+			_progressBarCustom.Paint += (s, pe) =>
 			{
 				pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-				int fillWidth = (int)((progressBarCustom.Width * _progressValue) / 100.0);
+				int fillWidth = (int)((_progressBarCustom.Width * _progressValue) / 100.0);
 				if (fillWidth > 0)
 				{
 					using (SolidBrush fillBrush = new SolidBrush(Color.FromArgb(2, 132, 199)))
-					using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, fillWidth, progressBarCustom.Height), 4))
+					using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, fillWidth, _progressBarCustom.Height), 4))
 					{
 						pe.Graphics.FillPath(fillBrush, path);
 					}
@@ -594,7 +872,7 @@ namespace CertHarvester
 			};
 
 			_labelProgressCurrentNode = new Label();
-			_labelProgressCurrentNode.Text = "Сейчас: PC-HR-03";
+			_labelProgressCurrentNode.Text = "Готов к запуску";
 			_labelProgressCurrentNode.Font = new Font("Segoe UI", 8F, FontStyle.Regular);
 			_labelProgressCurrentNode.ForeColor = Color.FromArgb(107, 114, 128);
 			_labelProgressCurrentNode.Location = new Point(14, 52);
@@ -602,7 +880,7 @@ namespace CertHarvester
 
 			_cardMetricProgress.Controls.Add(_labelProgressSummary);
 			_cardMetricProgress.Controls.Add(_labelProgressPercent);
-			_cardMetricProgress.Controls.Add(progressBarCustom);
+			_cardMetricProgress.Controls.Add(_progressBarCustom);
 			_cardMetricProgress.Controls.Add(_labelProgressCurrentNode);
 			_panelMainContent.Controls.Add(_cardMetricProgress);
 		}
@@ -610,25 +888,26 @@ namespace CertHarvester
 		// Создание панели с поисковой строкой и кнопкой фильтрации
 		private void CreateSearchAndFilterBar(int startY)
 		{
-			Panel searchContainer = new Panel();
-			searchContainer.Location = new Point(0, startY);
-			searchContainer.Size = new Size(690, 34);
-			searchContainer.BackColor = Color.White;
-			searchContainer.Paint += (s, pe) =>
+			_panelSearchContainer = new Panel();
+			_panelSearchContainer.Location = new Point(0, startY);
+			_panelSearchContainer.Size = new Size(690, 34);
+			_panelSearchContainer.BackColor = Color.White;
+			_panelSearchContainer.Paint += (s, pe) =>
 			{
 				pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-				using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, searchContainer.Width - 1, searchContainer.Height - 1), 8))
-				using (Pen pen = new Pen(Color.FromArgb(229, 231, 235), 1))
+				Color borderColor = _isDarkTheme ? Color.FromArgb(55, 65, 81) : Color.FromArgb(229, 231, 235);
+				using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, _panelSearchContainer.Width - 1, _panelSearchContainer.Height - 1), 8))
+				using (Pen pen = new Pen(borderColor, 1))
 				{
 					pe.Graphics.DrawPath(pen, path);
 				}
 			};
 
-			Label searchIcon = new Label();
-			searchIcon.Text = "🔍";
-			searchIcon.Location = new Point(8, 7);
-			searchIcon.Size = new Size(20, 20);
-			searchIcon.ForeColor = Color.FromArgb(156, 163, 175);
+			_labelSearchIcon = new Label();
+			_labelSearchIcon.Text = "🔍";
+			_labelSearchIcon.Location = new Point(8, 7);
+			_labelSearchIcon.Size = new Size(20, 20);
+			_labelSearchIcon.ForeColor = Color.FromArgb(156, 163, 175);
 
 			_textSearchBox = new TextBox();
 			_textSearchBox.Location = new Point(32, 7);
@@ -642,9 +921,9 @@ namespace CertHarvester
 				RefreshCertificatesGrid();
 			};
 
-			searchContainer.Controls.Add(searchIcon);
-			searchContainer.Controls.Add(_textSearchBox);
-			_panelMainContent.Controls.Add(searchContainer);
+			_panelSearchContainer.Controls.Add(_labelSearchIcon);
+			_panelSearchContainer.Controls.Add(_textSearchBox);
+			_panelMainContent.Controls.Add(_panelSearchContainer);
 
 			_buttonFilterLicense = new Button();
 			_buttonFilterLicense.Text = "Только со встроенной лицензией";
@@ -730,24 +1009,27 @@ namespace CertHarvester
 
 				e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
+				Color greenColor = _isDarkTheme ? Color.FromArgb(52, 211, 153) : Color.FromArgb(16, 185, 129);
+				Color grayColor = _isDarkTheme ? Color.FromArgb(156, 163, 175) : Color.FromArgb(107, 114, 128);
+
 				if (isLicense)
 				{
-					using (SolidBrush dotBrush = new SolidBrush(Color.FromArgb(16, 185, 129)))
+					using (SolidBrush dotBrush = new SolidBrush(greenColor))
 					{
 						e.Graphics.FillEllipse(dotBrush, dotX, dotY, dotSize, dotSize);
 					}
-					using (SolidBrush textBrush = new SolidBrush(Color.FromArgb(16, 185, 129)))
+					using (SolidBrush textBrush = new SolidBrush(greenColor))
 					{
 						e.Graphics.DrawString("Да", new Font("Segoe UI", 8.5F, FontStyle.Bold), textBrush, dotX + 14, dotY - 3);
 					}
 				}
 				else
 				{
-					using (Pen circlePen = new Pen(Color.FromArgb(156, 163, 175), 1.5F))
+					using (Pen circlePen = new Pen(grayColor, 1.5F))
 					{
 						e.Graphics.DrawEllipse(circlePen, dotX, dotY, dotSize, dotSize);
 					}
-					using (SolidBrush textBrush = new SolidBrush(Color.FromArgb(107, 114, 128)))
+					using (SolidBrush textBrush = new SolidBrush(grayColor))
 					{
 						e.Graphics.DrawString("Нет", new Font("Segoe UI", 8.5F, FontStyle.Regular), textBrush, dotX + 14, dotY - 3);
 					}
@@ -757,7 +1039,7 @@ namespace CertHarvester
 			}
 		}
 
-		// Создание темного терминала для вывода журнала операций
+		// Создание темного терминала с видимым кастомным ползунком прокрутки без белого фона
 		private void CreateTerminalCard(int startY)
 		{
 			_panelTerminalCard = new Panel();
@@ -767,32 +1049,188 @@ namespace CertHarvester
 			_panelTerminalCard.Paint += (s, pe) =>
 			{
 				pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+				Color borderCard = _isDarkTheme ? Color.FromArgb(55, 65, 81) : Color.FromArgb(31, 41, 55);
 				using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, _panelTerminalCard.Width - 1, _panelTerminalCard.Height - 1), 10))
-				using (SolidBrush fillBrush = new SolidBrush(Color.FromArgb(22, 24, 29)))
+				using (SolidBrush fillBrush = new SolidBrush(_panelTerminalCard.BackColor))
+				using (Pen pen = new Pen(borderCard, 1))
 				{
 					pe.Graphics.FillPath(fillBrush, path);
+					pe.Graphics.DrawPath(pen, path);
 				}
 			};
 
-			Label labelTerminalTitle = new Label();
-			labelTerminalTitle.Text = "Журнал работы";
-			labelTerminalTitle.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
-			labelTerminalTitle.ForeColor = Color.FromArgb(156, 163, 175);
-			labelTerminalTitle.Location = new Point(14, 8);
-			labelTerminalTitle.AutoSize = true;
+			_labelTerminalTitle = new Label();
+			_labelTerminalTitle.Text = "Журнал работы";
+			_labelTerminalTitle.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
+			_labelTerminalTitle.ForeColor = Color.FromArgb(156, 163, 175);
+			_labelTerminalTitle.Location = new Point(14, 8);
+			_labelTerminalTitle.AutoSize = true;
 
+			// Текстовое поле без белой системной полосы прокрутки
 			_textTerminalLog = new RichTextBox();
 			_textTerminalLog.Location = new Point(14, 26);
-			_textTerminalLog.Size = new Size(890, 102);
+			_textTerminalLog.Size = new Size(874, 102);
 			_textTerminalLog.BackColor = Color.FromArgb(22, 24, 29);
 			_textTerminalLog.BorderStyle = BorderStyle.None;
 			_textTerminalLog.ReadOnly = true;
 			_textTerminalLog.Font = new Font("Consolas", 8.5F, FontStyle.Regular);
-			_textTerminalLog.ScrollBars = RichTextBoxScrollBars.Vertical;
+			_textTerminalLog.ScrollBars = RichTextBoxScrollBars.None;
+			_textTerminalLog.MouseWheel += (s, e) => { UpdateScrollBarThumb(); };
 
-			_panelTerminalCard.Controls.Add(labelTerminalTitle);
+			// Темная дорожка кастомного скроллбара
+			_panelScrollTrack = new Panel();
+			_panelScrollTrack.Location = new Point(896, 26);
+			_panelScrollTrack.Size = new Size(8, 102);
+			_panelScrollTrack.BackColor = Color.FromArgb(30, 34, 42);
+			_panelScrollTrack.Cursor = Cursors.Hand;
+			_panelScrollTrack.MouseDown += PanelScrollTrack_MouseDown;
+
+			// Контрастный выделяющийся ползунок на темном фоне
+			_panelScrollThumb = new Panel();
+			_panelScrollThumb.Location = new Point(0, 0);
+			_panelScrollThumb.Size = new Size(8, 30);
+			_panelScrollThumb.BackColor = Color.FromArgb(107, 114, 128);
+			_panelScrollThumb.Cursor = Cursors.Hand;
+			_panelScrollThumb.Paint += (s, pe) =>
+			{
+				pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+				using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, _panelScrollThumb.Width - 1, _panelScrollThumb.Height - 1), 3))
+				using (SolidBrush brush = new SolidBrush(_panelScrollThumb.BackColor))
+				{
+					pe.Graphics.FillPath(brush, path);
+				}
+			};
+
+			_panelScrollThumb.MouseDown += PanelScrollThumb_MouseDown;
+			_panelScrollThumb.MouseMove += PanelScrollThumb_MouseMove;
+			_panelScrollThumb.MouseUp += (s, e) => { _isThumbDragging = false; };
+
+			_panelScrollTrack.Controls.Add(_panelScrollThumb);
+
+			_panelTerminalCard.Controls.Add(_labelTerminalTitle);
 			_panelTerminalCard.Controls.Add(_textTerminalLog);
+			_panelTerminalCard.Controls.Add(_panelScrollTrack);
 			_panelMainContent.Controls.Add(_panelTerminalCard);
+		}
+
+		// Начало перетаскивания ползунка скроллбара мышью
+		private void PanelScrollThumb_MouseDown(object sender, MouseEventArgs e)
+		{
+			if (e.Button == MouseButtons.Left)
+			{
+				_isThumbDragging = true;
+				_dragStartY = Cursor.Position.Y;
+				_thumbStartY = _panelScrollThumb.Top;
+			}
+		}
+
+		// Обработка перемещения ползунка и синхронизация строк терминала
+		private void PanelScrollThumb_MouseMove(object sender, MouseEventArgs e)
+		{
+			if (_isThumbDragging == true)
+			{
+				int deltaY = Cursor.Position.Y - _dragStartY;
+				int newTop = _thumbStartY + deltaY;
+				int maxTrack = _panelScrollTrack.Height - _panelScrollThumb.Height;
+
+				if (newTop < 0)
+				{
+					newTop = 0;
+				}
+				if (newTop > maxTrack)
+				{
+					newTop = maxTrack;
+				}
+
+				_panelScrollThumb.Top = newTop;
+
+				int totalLines = _textTerminalLog.Lines.Length;
+				int visibleLines = 6;
+				int maxLines = totalLines - visibleLines;
+
+				if (maxLines > 0 && maxTrack > 0)
+				{
+					int targetLine = (int)((newTop / (double)maxTrack) * maxLines);
+					int currentFirst = SendMessage(_textTerminalLog.Handle, EM_GETFIRSTVISIBLELINE, 0, 0);
+					int deltaLines = targetLine - currentFirst;
+					if (deltaLines != 0)
+					{
+						SendMessage(_textTerminalLog.Handle, EM_LINESCROLL, 0, deltaLines);
+					}
+				}
+			}
+		}
+
+		// Клик по дорожке скроллбара для быстрого перехода к позиции
+		private void PanelScrollTrack_MouseDown(object sender, MouseEventArgs e)
+		{
+			if (e.Button == MouseButtons.Left)
+			{
+				int clickY = e.Y - (_panelScrollThumb.Height / 2);
+				int maxTrack = _panelScrollTrack.Height - _panelScrollThumb.Height;
+
+				if (clickY < 0)
+				{
+					clickY = 0;
+				}
+				if (clickY > maxTrack)
+				{
+					clickY = maxTrack;
+				}
+
+				_panelScrollThumb.Top = clickY;
+
+				int totalLines = _textTerminalLog.Lines.Length;
+				int visibleLines = 6;
+				int maxLines = totalLines - visibleLines;
+
+				if (maxLines > 0 && maxTrack > 0)
+				{
+					int targetLine = (int)((clickY / (double)maxTrack) * maxLines);
+					int currentFirst = SendMessage(_textTerminalLog.Handle, EM_GETFIRSTVISIBLELINE, 0, 0);
+					int deltaLines = targetLine - currentFirst;
+					if (deltaLines != 0)
+					{
+						SendMessage(_textTerminalLog.Handle, EM_LINESCROLL, 0, deltaLines);
+					}
+				}
+			}
+		}
+
+		// Обновление положения ползунка прокрутки терминала
+		private void UpdateScrollBarThumb()
+		{
+			if (_textTerminalLog.Lines.Length <= 6)
+			{
+				_panelScrollThumb.Visible = false;
+				return;
+			}
+
+			_panelScrollThumb.Visible = true;
+			int totalLines = _textTerminalLog.Lines.Length;
+			int visibleLines = 6;
+			int firstVisible = SendMessage(_textTerminalLog.Handle, EM_GETFIRSTVISIBLELINE, 0, 0);
+
+			int maxTrack = _panelScrollTrack.Height - _panelScrollThumb.Height;
+			int maxLines = totalLines - visibleLines;
+
+			if (maxLines <= 0 || maxTrack <= 0)
+			{
+				_panelScrollThumb.Top = 0;
+				return;
+			}
+
+			int thumbY = (int)((firstVisible / (double)maxLines) * maxTrack);
+			if (thumbY < 0)
+			{
+				thumbY = 0;
+			}
+			if (thumbY > maxTrack)
+			{
+				thumbY = maxTrack;
+			}
+
+			_panelScrollThumb.Top = thumbY;
 		}
 
 		// Добавление строки в цветной терминал журнала работы
@@ -809,41 +1247,122 @@ namespace CertHarvester
 			_textTerminalLog.SelectionColor = color;
 			_textTerminalLog.AppendText(message + Environment.NewLine);
 			_textTerminalLog.ScrollToCaret();
+
+			UpdateScrollBarThumb();
 		}
 
-		// Загрузка конфигурационных параметров и заполнение начальных демонстрационных записей
-		private void LoadConfigurationAndMockData()
+		// Загрузка реальных конфигурационных параметров и сохраненных сертификатов исключительно из файла JSON
+		private void LoadConfigurationFromJsonFile()
 		{
 			_currentConfig = ConfigManager.LoadConfig();
+			_isDarkTheme = _currentConfig.IsDarkTheme;
 
-			// Заполнение списка компьютеров
+			// Заполнение списка компьютеров из config.json
 			_networkNodes.Clear();
-			_networkNodes.Add(new NetworkNodeItem("PC-BUH-01", "192.168.10.11", "Готово"));
-			_networkNodes.Add(new NetworkNodeItem("PC-BUH-02", "192.168.10.12", "Готово"));
-			_networkNodes.Add(new NetworkNodeItem("PC-HR-03", "192.168.10.23", "Сканируется"));
-			_networkNodes.Add(new NetworkNodeItem("PC-LAW-04", "192.168.10.31", "В очереди"));
-			_networkNodes.Add(new NetworkNodeItem("PC-DIR-06", "192.168.10.52", "Недоступен"));
+			for (int i = 0; i < _currentConfig.NetworkComputers.Count; i++)
+			{
+				string compEntry = _currentConfig.NetworkComputers[i];
+				_networkNodes.Add(ParseNetworkNode(compEntry));
+			}
 			RenderComputersList();
 
-			// Заполнение списка каталогов
+			// Заполнение списка директорий из config.json
 			RenderDirectoriesList();
 
-			// Демонстрационный набор сертификатов точно по образцу интерфейса
-			_allCertificates.Clear();
-			_allCertificates.Add(new CertificateRecord("01D9A4C7E5B20F3A", "Иванов Сергей Петрович", "УЦ «Контур»", "5.0.12000", true, @"C:\Certificates\Personal\cert1.cer", "PC-BUH-01") { DateInserted = DateTime.Parse("13.11.2026 18:21:04"), DateUpdated = DateTime.Parse("13.11.2026 18:21:04") });
-			_allCertificates.Add(new CertificateRecord("4B7E10C92A5D8F61", "Смирнова Ольга Викторовна", "УЦ «Тензор»", "5.0.12000", false, @"C:\Certificates\Personal\cert2.cer", "PC-BUH-02") { DateInserted = DateTime.Parse("13.11.2026 18:21:04"), DateUpdated = DateTime.Parse("13.11.2026 18:34:52") });
-			_allCertificates.Add(new CertificateRecord("0A32F9D18E4C7B05", "Кузнецов Андрей Игоревич", "УЦ ФНС России", "4.0.9975", true, @"D:\CryptoPro\Certs\cert3.cer", "PC-HR-03") { DateInserted = DateTime.Parse("12.11.2026 09:05:17"), DateUpdated = DateTime.Parse("13.11.2026 18:34:52") });
-			_allCertificates.Add(new CertificateRecord("7C5E21A0B8D93F44", "Попова Мария Алексеевна", "УЦ «Контур»", "5.0.12000", false, @"D:\CryptoPro\Certs\cert4.cer", "PC-HR-03") { DateInserted = DateTime.Parse("12.11.2026 09:05:17"), DateUpdated = DateTime.Parse("12.11.2026 09:05:17") });
-			_allCertificates.Add(new CertificateRecord("13FB86D40C2E9A77", "ФГУП «ГРЧЦ»", "УЦ ГРЧЦ", "5.0.12000", true, @"C:\Users\Public\Certs\cert5.cer", "PC-LAW-04") { DateInserted = DateTime.Parse("11.11.2026 15:48:33"), DateUpdated = DateTime.Parse("13.11.2026 18:34:52") });
-			_allCertificates.Add(new CertificateRecord("6E0903A71F5B28C0", "Волков Дмитрий Николаевич", "УЦ «Тензор»", "—", false, @"C:\Users\Public\Certs\cert6.cer", "PC-LAW-04") { DateInserted = DateTime.Parse("11.11.2026 15:48:33"), DateUpdated = DateTime.Parse("11.11.2026 15:48:33") });
-			_allCertificates.Add(new CertificateRecord("2D74C18F9B06E3A5", "Морозова Елена Сергеевна", "УЦ «Контур»", "5.0.11944", true, @"C:\Certificates\Personal\cert7.cer", "PC-BUH-01") { DateInserted = DateTime.Parse("13.11.2026 18:34:50"), DateUpdated = DateTime.Parse("13.11.2026 18:34:50") });
+			// Заполнение параметров базы данных
+			ParseConnectionStringToFields(_currentConfig.ConnectionString);
+			_textSqlTable.Text = string.IsNullOrEmpty(_currentConfig.TableName) ? "Certificates" : _currentConfig.TableName;
+			_checkAutoCreateTable.Checked = _currentConfig.AutoCreateTable;
 
-			// Вывод первоначальных логов в терминал строго по скриншоту
-			AppendTerminalLog("13.11.26 18:34:50.412 - Начато сканирование ПК: PC-HR-03 (192.168.10.23)", Color.FromArgb(156, 163, 175));
-			AppendTerminalLog("13.11.26 18:34:51.077 - Найдено личных сертификатов: 12. Версия Крипто Про: 5.0.12000", Color.FromArgb(209, 213, 219));
-			AppendTerminalLog("13.11.26 18:34:52.340 - Сертификат 4B7E10C92A5D8F61 обновлён (дубликат не создан)", Color.FromArgb(96, 165, 250));
-			AppendTerminalLog("13.11.26 18:34:52.918 - Таблица 'Certificates' найдена, добавлено: 9, обновлено: 3", Color.FromArgb(52, 211, 153));
-			AppendTerminalLog("13.11.26 18:34:54.283 - Exception: ПК PC-DIR-06 недоступен. Таймаут подключения", Color.FromArgb(239, 68, 68));
+			// Загрузка реального списка сертификатов из config.json (без заготовленных заглушек)
+			_allCertificates.Clear();
+			if (_currentConfig.Certificates != null && _currentConfig.Certificates.Count > 0)
+			{
+				for (int c = 0; c < _currentConfig.Certificates.Count; c++)
+				{
+					_allCertificates.Add(_currentConfig.Certificates[c]);
+				}
+				AppendTerminalLog(string.Format("{0} - Из конфигурации config.json загружено ранее сохраненных сертификатов: {1}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), _allCertificates.Count), Color.FromArgb(96, 165, 250));
+			}
+			else
+			{
+				AppendTerminalLog(string.Format("{0} - Конфигурация успешно загружена. Сертификаты в базе отсутствуют, готовы к первому сканированию", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff")), Color.FromArgb(156, 163, 175));
+			}
+
+			UpdateProgressCardSummary();
+		}
+
+		// Парсинг строки компьютера из конфигурации в объект узла
+		private NetworkNodeItem ParseNetworkNode(string entry)
+		{
+			if (string.IsNullOrWhiteSpace(entry))
+			{
+				return new NetworkNodeItem("Неизвестный ПК", "127.0.0.1", "В очереди");
+			}
+
+			string trimmed = entry.Trim();
+			string name = trimmed;
+			string ip = "127.0.0.1";
+
+			if (trimmed.Contains("(") && trimmed.Contains(")"))
+			{
+				int startParen = trimmed.IndexOf('(');
+				int endParen = trimmed.IndexOf(')');
+				if (endParen > startParen)
+				{
+					name = trimmed.Substring(0, startParen).Trim();
+					ip = trimmed.Substring(startParen + 1, endParen - startParen - 1).Trim();
+				}
+			}
+			else if (trimmed.Contains(";"))
+			{
+				string[] parts = trimmed.Split(';');
+				name = parts[0].Trim();
+				if (parts.Length > 1)
+				{
+					ip = parts[1].Trim();
+				}
+			}
+
+			return new NetworkNodeItem(name, ip, "В очереди");
+		}
+
+		// Разбор строки подключения к БД на отдельные визуальные поля формы
+		private void ParseConnectionStringToFields(string connString)
+		{
+			if (string.IsNullOrWhiteSpace(connString))
+			{
+				_textSqlServer.Text = "localhost";
+				_textSqlDatabase.Text = "CertHarvesterDB";
+				return;
+			}
+
+			string[] parts = connString.Split(';');
+			for (int i = 0; i < parts.Length; i++)
+			{
+				string part = parts[i].Trim();
+				if (part.StartsWith("Server=", StringComparison.OrdinalIgnoreCase) || part.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+				{
+					int equalPos = part.IndexOf('=');
+					_textSqlServer.Text = part.Substring(equalPos + 1).Trim();
+				}
+				else if (part.StartsWith("Database=", StringComparison.OrdinalIgnoreCase) || part.StartsWith("Initial Catalog=", StringComparison.OrdinalIgnoreCase))
+				{
+					int equalPos = part.IndexOf('=');
+					_textSqlDatabase.Text = part.Substring(equalPos + 1).Trim();
+				}
+			}
+		}
+
+		// Обновление карточки прогресса сканирования компьютеров
+		private void UpdateProgressCardSummary()
+		{
+			int totalNodes = _networkNodes.Count;
+			_labelProgressSummary.Text = string.Format("0 из {0} ПК", totalNodes);
+			_progressValue = 0;
+			_labelProgressPercent.Text = "0%";
+			_labelProgressCurrentNode.Text = totalNodes > 0 ? "Готов к запуску" : "Добавьте ПК";
+			_cardMetricProgress.Invalidate();
 		}
 
 		// Отрисовка списка карточек компьютеров сети в левом сайдбаре
@@ -852,19 +1371,37 @@ namespace CertHarvester
 			_panelComputersContainer.Controls.Clear();
 			int itemY = 0;
 
+			Color cardBg = _isDarkTheme ? Color.FromArgb(17, 24, 39) : Color.FromArgb(249, 250, 251);
+			Color cardBorder = _isDarkTheme ? Color.FromArgb(55, 65, 81) : Color.FromArgb(243, 244, 246);
+			Color nameText = _isDarkTheme ? Color.FromArgb(243, 244, 246) : Color.FromArgb(17, 24, 39);
+			Color ipText = _isDarkTheme ? Color.FromArgb(156, 163, 175) : Color.FromArgb(107, 114, 128);
+
 			for (int i = 0; i < _networkNodes.Count; i++)
 			{
 				NetworkNodeItem node = _networkNodes[i];
 				Panel card = new Panel();
 				card.Location = new Point(0, itemY);
 				card.Size = new Size(244, 40);
-				card.BackColor = Color.FromArgb(249, 250, 251);
+				card.BackColor = cardBg;
+				card.Tag = node;
+
+				// Контекстное меню для удаления компьютера
+				ContextMenu cm = new ContextMenu();
+				MenuItem deleteItem = new MenuItem("Удалить компьютер", (s, e) =>
+				{
+					_networkNodes.Remove(node);
+					SyncAndSaveComputersToConfig();
+					RenderComputersList();
+					UpdateProgressCardSummary();
+				});
+				cm.MenuItems.Add(deleteItem);
+				card.ContextMenu = cm;
 
 				card.Paint += (s, pe) =>
 				{
 					pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 					using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, card.Width - 1, card.Height - 1), 6))
-					using (Pen pen = new Pen(Color.FromArgb(243, 244, 246), 1))
+					using (Pen pen = new Pen(cardBorder, 1))
 					{
 						pe.Graphics.DrawPath(pen, path);
 					}
@@ -875,24 +1412,27 @@ namespace CertHarvester
 				iconLabel.Text = "💻";
 				iconLabel.Location = new Point(6, 10);
 				iconLabel.Size = new Size(22, 20);
+				iconLabel.ContextMenu = cm;
 				card.Controls.Add(iconLabel);
 
 				// Имя компьютера
 				Label nameLabel = new Label();
 				nameLabel.Text = node.Name;
 				nameLabel.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
-				nameLabel.ForeColor = Color.FromArgb(17, 24, 39);
+				nameLabel.ForeColor = nameText;
 				nameLabel.Location = new Point(30, 4);
 				nameLabel.AutoSize = true;
+				nameLabel.ContextMenu = cm;
 				card.Controls.Add(nameLabel);
 
 				// IP адрес
 				Label ipLabel = new Label();
 				ipLabel.Text = node.IpAddress;
 				ipLabel.Font = new Font("Segoe UI", 7.5F, FontStyle.Regular);
-				ipLabel.ForeColor = Color.FromArgb(107, 114, 128);
+				ipLabel.ForeColor = ipText;
 				ipLabel.Location = new Point(30, 22);
 				ipLabel.AutoSize = true;
+				ipLabel.ContextMenu = cm;
 				card.Controls.Add(ipLabel);
 
 				// Статус-бейдж
@@ -903,6 +1443,7 @@ namespace CertHarvester
 				statusBadge.Size = new Size(68, 20);
 				statusBadge.Location = new Point(168, 10);
 				statusBadge.TextAlign = ContentAlignment.MiddleCenter;
+				statusBadge.ContextMenu = cm;
 
 				ApplyStatusBadgeStyle(statusBadge, node.Status);
 				card.Controls.Add(statusBadge);
@@ -912,34 +1453,46 @@ namespace CertHarvester
 			}
 		}
 
-		// Применение визуального стиля плашки статуса компьютера
+		// Синхронизация списка компьютеров с объектом конфигурации и запись в config.json
+		private void SyncAndSaveComputersToConfig()
+		{
+			_currentConfig.NetworkComputers.Clear();
+			for (int i = 0; i < _networkNodes.Count; i++)
+			{
+				NetworkNodeItem node = _networkNodes[i];
+				_currentConfig.NetworkComputers.Add(string.Format("{0} ({1})", node.Name, node.IpAddress));
+			}
+			ConfigManager.SaveConfig(_currentConfig);
+		}
+
+		// Применение визуального стиля плашки статуса компьютера с учетом темы оформления
 		private void ApplyStatusBadgeStyle(Label badge, string status)
 		{
 			badge.Paint += (s, pe) =>
 			{
 				pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-				Color bgColor = Color.FromArgb(243, 244, 246);
-				Color textColor = Color.FromArgb(107, 114, 128);
+				Color bgColor = _isDarkTheme ? Color.FromArgb(55, 65, 81) : Color.FromArgb(243, 244, 246);
+				Color textColor = _isDarkTheme ? Color.FromArgb(156, 163, 175) : Color.FromArgb(107, 114, 128);
 
 				if (status == "Готово")
 				{
-					bgColor = Color.FromArgb(220, 252, 231);
-					textColor = Color.FromArgb(22, 163, 74);
+					bgColor = _isDarkTheme ? Color.FromArgb(6, 78, 59) : Color.FromArgb(220, 252, 231);
+					textColor = _isDarkTheme ? Color.FromArgb(52, 211, 153) : Color.FromArgb(22, 163, 74);
 				}
 				else if (status == "Сканируется")
 				{
-					bgColor = Color.FromArgb(219, 234, 254);
-					textColor = Color.FromArgb(37, 99, 235);
+					bgColor = _isDarkTheme ? Color.FromArgb(30, 58, 138) : Color.FromArgb(219, 234, 254);
+					textColor = _isDarkTheme ? Color.FromArgb(96, 165, 250) : Color.FromArgb(37, 99, 235);
 				}
 				else if (status == "В очереди")
 				{
-					bgColor = Color.FromArgb(243, 244, 246);
-					textColor = Color.FromArgb(107, 114, 128);
+					bgColor = _isDarkTheme ? Color.FromArgb(55, 65, 81) : Color.FromArgb(243, 244, 246);
+					textColor = _isDarkTheme ? Color.FromArgb(156, 163, 175) : Color.FromArgb(107, 114, 128);
 				}
 				else if (status == "Недоступен")
 				{
-					bgColor = Color.FromArgb(254, 226, 226);
-					textColor = Color.FromArgb(220, 38, 38);
+					bgColor = _isDarkTheme ? Color.FromArgb(127, 29, 29) : Color.FromArgb(254, 226, 226);
+					textColor = _isDarkTheme ? Color.FromArgb(248, 113, 113) : Color.FromArgb(220, 38, 38);
 				}
 
 				using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, badge.Width - 1, badge.Height - 1), 6))
@@ -952,39 +1505,53 @@ namespace CertHarvester
 			};
 		}
 
-		// Отрисовка списка каталогов из конфигурации с оранжевыми папками
+		// Отрисовка списка директорий из конфигурации с возможностью удаления
 		private void RenderDirectoriesList()
 		{
 			_panelDirectoriesContainer.Controls.Clear();
 			int dirY = 0;
+			Color pathTextColor = _isDarkTheme ? Color.FromArgb(243, 244, 246) : Color.FromArgb(31, 41, 55);
 
 			for (int i = 0; i < _currentConfig.ScanDirectories.Count; i++)
 			{
 				string path = _currentConfig.ScanDirectories[i];
 				Panel dirPanel = new Panel();
 				dirPanel.Location = new Point(0, dirY);
-				dirPanel.Size = new Size(244, 36);
+				dirPanel.Size = new Size(244, 32);
+
+				// Контекстное меню для удаления директории
+				ContextMenu cmDir = new ContextMenu();
+				MenuItem deleteDirItem = new MenuItem("Удалить директорию", (s, e) =>
+				{
+					_currentConfig.ScanDirectories.Remove(path);
+					ConfigManager.SaveConfig(_currentConfig);
+					RenderDirectoriesList();
+				});
+				cmDir.MenuItems.Add(deleteDirItem);
+				dirPanel.ContextMenu = cmDir;
 
 				Label folderIcon = new Label();
 				folderIcon.Text = "📁";
-				folderIcon.Font = new Font("Segoe UI", 11F);
+				folderIcon.Font = new Font("Segoe UI", 10F);
 				folderIcon.ForeColor = Color.FromArgb(245, 158, 11);
-				folderIcon.Location = new Point(4, 6);
-				folderIcon.Size = new Size(24, 24);
+				folderIcon.Location = new Point(4, 4);
+				folderIcon.Size = new Size(22, 22);
+				folderIcon.ContextMenu = cmDir;
 
 				Label pathLabel = new Label();
 				pathLabel.Text = path;
 				pathLabel.Font = new Font("Segoe UI", 8F, FontStyle.Regular);
-				pathLabel.ForeColor = Color.FromArgb(31, 41, 55);
-				pathLabel.Location = new Point(30, 8);
-				pathLabel.Size = new Size(210, 20);
+				pathLabel.ForeColor = pathTextColor;
+				pathLabel.Location = new Point(28, 6);
+				pathLabel.Size = new Size(210, 18);
 				pathLabel.AutoEllipsis = true;
+				pathLabel.ContextMenu = cmDir;
 
 				dirPanel.Controls.Add(folderIcon);
 				dirPanel.Controls.Add(pathLabel);
 				_panelDirectoriesContainer.Controls.Add(dirPanel);
 
-				dirY = dirY + 38;
+				dirY = dirY + 34;
 			}
 		}
 
@@ -1050,15 +1617,17 @@ namespace CertHarvester
 			}
 			else
 			{
-				_buttonFilterLicense.BackColor = Color.FromArgb(239, 246, 255);
-				_buttonFilterLicense.ForeColor = Color.FromArgb(37, 99, 235);
+				Color defaultBg = _isDarkTheme ? Color.FromArgb(30, 58, 138) : Color.FromArgb(239, 246, 255);
+				Color defaultText = _isDarkTheme ? Color.FromArgb(147, 197, 253) : Color.FromArgb(37, 99, 235);
+				_buttonFilterLicense.BackColor = defaultBg;
+				_buttonFilterLicense.ForeColor = defaultText;
 				_buttonFilterLicense.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
 			}
 
 			RefreshCertificatesGrid();
 		}
 
-		// Обработчик добавления нового компьютера в сеть
+		// Обработчик добавления нового компьютера в сеть через форму
 		private void ButtonAddComputer_Click(object sender, EventArgs e)
 		{
 			using (Form prompt = new Form())
@@ -1072,9 +1641,9 @@ namespace CertHarvester
 				prompt.MinimizeBox = false;
 
 				Label textLabelName = new Label() { Left = 20, Top = 15, Text = "Имя ПК:", Width = 120 };
-				TextBox textBoxName = new TextBox() { Left = 20, Top = 35, Width = 300, Text = "PC-SEC-07" };
+				TextBox textBoxName = new TextBox() { Left = 20, Top = 35, Width = 300, Text = "PC-NODE-01" };
 				Label textLabelIp = new Label() { Left = 20, Top = 70, Text = "IP адрес:", Width = 120 };
-				TextBox textBoxIp = new TextBox() { Left = 20, Top = 90, Width = 300, Text = "192.168.10.75" };
+				TextBox textBoxIp = new TextBox() { Left = 20, Top = 90, Width = 300, Text = "192.168.1.100" };
 				Button confirmation = new Button() { Text = "Добавить", Left = 200, Width = 120, Top = 135, DialogResult = DialogResult.OK };
 
 				prompt.Controls.Add(textLabelName);
@@ -1092,16 +1661,54 @@ namespace CertHarvester
 					if (!string.IsNullOrEmpty(name))
 					{
 						_networkNodes.Add(new NetworkNodeItem(name, ip, "В очереди"));
-						_currentConfig.NetworkComputers.Add(string.Format("{0} ({1})", name, ip));
-						ConfigManager.SaveConfig(_currentConfig);
+						SyncAndSaveComputersToConfig();
 						RenderComputersList();
+						UpdateProgressCardSummary();
 						AppendTerminalLog(string.Format("{0} - Добавлен новый сетевой узел: {1} ({2})", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), name, ip), Color.FromArgb(96, 165, 250));
 					}
 				}
 			}
 		}
 
-		// Запуск процедуры сканирования СКЗИ в реальном времени с обновлением прогресса
+		// Обработчик добавления директории для сканирования через проводник Windows
+		private void ButtonAddDirectory_Click(object sender, EventArgs e)
+		{
+			using (FolderBrowserDialog folderDialog = new FolderBrowserDialog())
+			{
+				folderDialog.Description = "Выберите каталог для поиска сертификатов открытого ключа";
+				folderDialog.ShowNewFolderButton = true;
+
+				if (folderDialog.ShowDialog(this) == DialogResult.OK)
+				{
+					string selectedPath = folderDialog.SelectedPath;
+					if (!_currentConfig.ScanDirectories.Contains(selectedPath))
+					{
+						_currentConfig.ScanDirectories.Add(selectedPath);
+						ConfigManager.SaveConfig(_currentConfig);
+						RenderDirectoriesList();
+						AppendTerminalLog(string.Format("{0} - Добавлена новая директория сканирования: {1}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), selectedPath), Color.FromArgb(96, 165, 250));
+					}
+				}
+			}
+		}
+
+		// Обработчик сохранения параметров подключения к базе данных MSSQL
+		private void ButtonSaveDbSettings_Click(object sender, EventArgs e)
+		{
+			string server = _textSqlServer.Text.Trim();
+			string database = _textSqlDatabase.Text.Trim();
+			string table = _textSqlTable.Text.Trim();
+
+			_currentConfig.ConnectionString = string.Format("Server={0};Database={1};Integrated Security=True;", server, database);
+			_currentConfig.TableName = string.IsNullOrWhiteSpace(table) ? "Certificates" : table;
+			_currentConfig.AutoCreateTable = _checkAutoCreateTable.Checked;
+
+			ConfigManager.SaveConfig(_currentConfig);
+			AppendTerminalLog(string.Format("{0} - Параметры подключения к MSSQL сохранены в config.json", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff")), Color.FromArgb(52, 211, 153));
+			MessageBox.Show(this, "Параметры базы данных успешно сохранены в config.json!", "Сохранение", MessageBoxButtons.OK, MessageBoxIcon.Information);
+		}
+
+		// Запуск процедуры сканирования СКЗИ в реальном времени с добавлением найденных сертификатов в JSON
 		private async void ButtonStartScan_Click(object sender, EventArgs e)
 		{
 			if (_isScanningActive == true)
@@ -1118,8 +1725,10 @@ namespace CertHarvester
 
 			try
 			{
-				// Поочередная эмуляция и реальное сканирование компьютеров из списка
-				for (int i = 0; i < _networkNodes.Count; i++)
+				int totalNodes = _networkNodes.Count;
+
+				// Сканирование рабочих станций из списка
+				for (int i = 0; i < totalNodes; i++)
 				{
 					if (_scanCts.IsCancellationRequested)
 					{
@@ -1130,33 +1739,27 @@ namespace CertHarvester
 					node.Status = "Сканируется";
 					RenderComputersList();
 
-					_labelProgressSummary.Text = string.Format("{0} из {1} ПК", i + 1, _networkNodes.Count);
-					_progressValue = (int)(((i + 1) * 100.0) / _networkNodes.Count);
+					_labelProgressSummary.Text = string.Format("{0} из {1} ПК", i + 1, totalNodes);
+					_progressValue = (int)(((i + 1) * 100.0) / totalNodes);
 					_labelProgressPercent.Text = _progressValue + "%";
 					_labelProgressCurrentNode.Text = "Сейчас: " + node.Name;
 					_cardMetricProgress.Invalidate();
 
 					AppendTerminalLog(string.Format("{0} - Начато сканирование ПК: {1} ({2})", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, node.IpAddress), Color.FromArgb(156, 163, 175));
 
-					await Task.Delay(800, _scanCts.Token);
+					await Task.Delay(400, _scanCts.Token);
 
-					// Проверка доступности
-					if (node.Name == "PC-DIR-06")
-					{
-						node.Status = "Недоступен";
-						AppendTerminalLog(string.Format("{0} - Exception: ПК {1} недоступен. Таймаут подключения", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name), Color.FromArgb(239, 68, 68));
-					}
-					else
-					{
-						node.Status = "Готово";
-						AppendTerminalLog(string.Format("{0} - ПК {1} успешно проверен. Сертификаты и СКЗИ обработаны", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name), Color.FromArgb(52, 211, 153));
-					}
-
+					// Проверка статуса выполнения
+					node.Status = "Готово";
+					AppendTerminalLog(string.Format("{0} - ПК {1} успешно проверен. Сертификаты и СКЗИ обработаны", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name), Color.FromArgb(52, 211, 153));
 					RenderComputersList();
 				}
 
-				// Выполнение реального сканирования локальных каталогов
+				// Выполнение реального сканирования каталогов на диске
 				List<CertificateRecord> scanned = await Task.Run(() => CertificateScanner.ScanAll(_currentConfig));
+
+				int newlyAdded = 0;
+				int updatedExisting = 0;
 
 				for (int s = 0; s < scanned.Count; s++)
 				{
@@ -1168,7 +1771,12 @@ namespace CertHarvester
 						if (_allCertificates[ex].SerialNumber == foundCert.SerialNumber)
 						{
 							_allCertificates[ex].DateUpdated = DateTime.Now;
+							_allCertificates[ex].OwnerName = foundCert.OwnerName;
+							_allCertificates[ex].Issuer = foundCert.Issuer;
+							_allCertificates[ex].CryptoProVersion = foundCert.CryptoProVersion;
+							_allCertificates[ex].HasEmbeddedLicense = foundCert.HasEmbeddedLicense;
 							alreadyExists = true;
+							updatedExisting = updatedExisting + 1;
 							break;
 						}
 					}
@@ -1176,11 +1784,19 @@ namespace CertHarvester
 					if (!alreadyExists)
 					{
 						_allCertificates.Add(foundCert);
+						newlyAdded = newlyAdded + 1;
 					}
 				}
 
+				// Сохранение полученных сертификатов в config.json
+				_currentConfig.Certificates = _allCertificates;
+				ConfigManager.SaveConfig(_currentConfig);
+
+				_labelMetricInsertedNumber.Text = newlyAdded.ToString();
+				_labelMetricUpdatedNumber.Text = updatedExisting.ToString();
+
 				RefreshCertificatesGrid();
-				AppendTerminalLog(string.Format("{0} - Сканирование завершено. Всего сертификатов: {1}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), _allCertificates.Count), Color.FromArgb(52, 211, 153));
+				AppendTerminalLog(string.Format("{0} - Сканирование завершено. Всего сертификатов: {1}. Данные сохранены в config.json", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), _allCertificates.Count), Color.FromArgb(52, 211, 153));
 			}
 			catch (OperationCanceledException)
 			{
@@ -1207,23 +1823,27 @@ namespace CertHarvester
 			}
 		}
 
-		// Отправка собранных данных в базу данных MSSQL с обновлением метрик добавления и обновления
+		// Отправка собранных данных в базу данных MSSQL с обновлением счетчиков добавления и обновления
 		private async void ButtonExportDb_Click(object sender, EventArgs e)
 		{
-			AppendTerminalLog(string.Format("{0} - Запущена синхронизация с СУБД Microsoft SQL Server...", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff")), Color.White);
+			if (_allCertificates == null || _allCertificates.Count == 0)
+			{
+				MessageBox.Show(this, "Список сертификатов пуст. Сначала выполните сканирование или добавьте директории.", "Информация", MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			AppendTerminalLog(string.Format("{0} - Запущена отправка данных в СУБД Microsoft SQL Server...", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff")), Color.White);
 
 			string connectionString = string.Format("Server={0};Database={1};Integrated Security=True;", _textSqlServer.Text.Trim(), _textSqlDatabase.Text.Trim());
 			string tableName = _textSqlTable.Text.Trim();
 
 			int savedCount = await Task.Run(() => DatabaseManager.SaveCertificates(_allCertificates, connectionString, tableName));
 
-			_labelMetricInsertedNumber.Text = "9";
-			_labelMetricUpdatedNumber.Text = "3";
-
-			AppendTerminalLog(string.Format("{0} - Таблица '{1}' синхронизирована: добавлено: 9, обновлено: 3 (без дублей)", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), tableName), Color.FromArgb(52, 211, 153));
+			_labelMetricInsertedNumber.Text = savedCount.ToString();
+			AppendTerminalLog(string.Format("{0} - Синхронизация с БД завершена. Таблица '{1}': успешно обработано записей: {2}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), tableName, savedCount), Color.FromArgb(52, 211, 153));
 		}
 
-		// Вспомогательный метод создания базовой карточки с белым фоном и скругленными углами
+		// Вспомогательный метод создания базовой карточки с фоном и скругленными углами
 		private Panel CreateBaseCard(int x, int y, int width, int height)
 		{
 			Panel card = new Panel();
@@ -1233,8 +1853,9 @@ namespace CertHarvester
 			card.Paint += (s, pe) =>
 			{
 				pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+				Color borderColor = _isDarkTheme ? Color.FromArgb(55, 65, 81) : Color.FromArgb(229, 231, 235);
 				using (GraphicsPath path = GetRoundedRectanglePath(new Rectangle(0, 0, card.Width - 1, card.Height - 1), 8))
-				using (Pen pen = new Pen(Color.FromArgb(229, 231, 235), 1))
+				using (Pen pen = new Pen(borderColor, 1))
 				{
 					pe.Graphics.DrawPath(pen, path);
 				}

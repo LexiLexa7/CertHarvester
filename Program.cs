@@ -138,15 +138,26 @@ namespace CertHarvester
 			}
 		}
 
+		private static bool _visualStylesConfigured = false;
+
 		// Инициализация и отображение графической панели управления на базе Windows Forms
 		public static void OpenGraphicalInterface()
 		{
 			try
 			{
 				Logger.LogInfo("Инициализация графической подсистемы Windows Forms");
-				Application.EnableVisualStyles();
-				Application.SetCompatibleTextRenderingDefault(false);
-				Application.Run(new ControlPanelForm());
+
+				if (_visualStylesConfigured == false)
+				{
+					Application.EnableVisualStyles();
+					Application.SetCompatibleTextRenderingDefault(false);
+					_visualStylesConfigured = true;
+				}
+
+				using (ControlPanelForm form = new ControlPanelForm())
+				{
+					form.ShowDialog();
+				}
 			}
 			catch (Exception ex)
 			{
