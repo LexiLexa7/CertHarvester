@@ -86,10 +86,15 @@ namespace CertHarvester
 		public static AppConfig CreateDefaultConfig()
 		{
 			AppConfig config = new AppConfig();
-			config.ScanDirectories.Add(@"C:\Certs");
-			config.ScanDirectories.Add(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certificates"));
-			config.NetworkComputers.Add(Environment.MachineName);
-			config.ConnectionString = "Server=localhost;Database=CertHarvesterDB;Integrated Security=True;";
+			config.ScanDirectories.Add(@"C:\Certificates\Personal");
+			config.ScanDirectories.Add(@"D:\CryptoPro\Certs");
+			config.ScanDirectories.Add(@"C:\Users\Public\Certs");
+			config.NetworkComputers.Add("PC-BUH-01 (192.168.10.11)");
+			config.NetworkComputers.Add("PC-BUH-02 (192.168.10.12)");
+			config.NetworkComputers.Add("PC-HR-03 (192.168.10.23)");
+			config.NetworkComputers.Add("PC-LAW-04 (192.168.10.31)");
+			config.NetworkComputers.Add("PC-DIR-06 (192.168.10.52)");
+			config.ConnectionString = "Server=SQL-SRV\\MSSQL2019;Database=CryptoInventory;Integrated Security=True;";
 			config.TableName = "Certificates";
 			return config;
 		}
