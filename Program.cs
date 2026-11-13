@@ -127,6 +127,10 @@ namespace CertHarvester
 				Console.ResetColor();
 				Console.WriteLine();
 
+				// Сохранение обнаруженных сертификатов в конфигурационный файл
+				config.Certificates = discoveredCertificates;
+				ConfigManager.SaveConfig(config);
+
 				Logger.LogInfo("Отправка полученных данных в таблицу СУБД Microsoft SQL Server 2019");
 				int savedRecordsCount = DatabaseManager.SaveCertificates(discoveredCertificates, config.ConnectionString, config.TableName);
 
