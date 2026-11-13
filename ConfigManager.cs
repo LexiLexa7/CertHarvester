@@ -1,21 +1,20 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Web.Script.Serialization;
 
 namespace CertHarvester
 {
 	/// <summary>
-	/// Класс управления чтением и сохранением параметров конфигурации приложения (Зона ответственности: Участник 3)
+	/// Класс управления чтением, сохранением и инициализацией параметров конфигурации приложения
 	/// </summary>
 	public static class ConfigManager
 	{
 		private const string DefaultConfigFileName = "config.json";
 
-		// Загрузка конфигурации из файла или создание файла конфигурации по умолчанию
+		// Загрузка конфигурации из JSON-файла или создание файла конфигурации со значениями по умолчанию
 		public static AppConfig LoadConfig(string filePath = null)
 		{
-			// TODO (Участник 3): Реализовать валидацию корректности путей сканирования при загрузке
-			// TODO (Участник 3): Добавить безопасное хранение учетных данных строки подключения к MSSQL
 			string targetFilePath = ResolveConfigPath(filePath);
 
 			try
@@ -52,8 +51,6 @@ namespace CertHarvester
 		// Сохранение переданного объекта конфигурации в JSON-файл
 		public static bool SaveConfig(AppConfig config, string filePath = null)
 		{
-			// TODO (Участник 3): Добавить резервное копирование предыдущей версии конфига перед перезаписью (.bak)
-			// TODO (Участник 3): Реализовать проверку прав на запись в целевой каталог
 			if (config == null)
 			{
 				Logger.LogError("Попытка сохранения пустой конфигурации (null)");
@@ -68,6 +65,12 @@ namespace CertHarvester
 				JavaScriptSerializer serializer = new JavaScriptSerializer();
 				string jsonContent = serializer.Serialize(config);
 
+				string targetDirectory = Path.GetDirectoryName(targetFilePath);
+				if (!string.IsNullOrEmpty(targetDirectory) && !Directory.Exists(targetDirectory))
+				{
+					Directory.CreateDirectory(targetDirectory);
+				}
+
 				File.WriteAllText(targetFilePath, jsonContent);
 				Logger.LogInfo("Конфигурация успешно сохранена в файл: " + targetFilePath);
 				return true;
@@ -79,10 +82,9 @@ namespace CertHarvester
 			}
 		}
 
-		// Формирование начального объекта конфигурации с типовыми путями для локального тестирования
+		// Формирование начального объекта конфигурации с типовыми директориями и параметрами для локального запуска
 		public static AppConfig CreateDefaultConfig()
 		{
-			// TODO (Участник 3): Загружать типовые пути сканирования из переменных окружения или системных каталогов
 			AppConfig config = new AppConfig();
 			config.ScanDirectories.Add(@"C:\Certs");
 			config.ScanDirectories.Add(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certificates"));
@@ -92,21 +94,21 @@ namespace CertHarvester
 			return config;
 		}
 
-		// Проверка инициализации списков внутри объекта конфигурации
+		// Проверка инициализации коллекций внутри объекта конфигурации во избежание NullReferenceException
 		private static void EnsureConfigCollections(AppConfig config)
 		{
 			if (config.ScanDirectories == null)
 			{
-				config.ScanDirectories = new System.Collections.Generic.List<string>();
+				config.ScanDirectories = new List<string>();
 			}
 
 			if (config.NetworkComputers == null)
 			{
-				config.NetworkComputers = new System.Collections.Generic.List<string>();
+				config.NetworkComputers = new List<string>();
 			}
 		}
 
-		// Определение полного пути к файлу конфигурации относительно каталога приложения
+		// Определение абсолютного пути к файлу конфигурации относительно рабочей директории
 		private static string ResolveConfigPath(string filePath)
 		{
 			if (string.IsNullOrWhiteSpace(filePath))

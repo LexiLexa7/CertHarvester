@@ -6,14 +6,13 @@ using System.Data.SqlClient;
 namespace CertHarvester
 {
 	/// <summary>
-	/// Класс управления взаимодействием с базой данных Microsoft SQL Server 2019 (Зона ответственности: Участник 2)
+	/// Класс управления взаимодействием с базой данных Microsoft SQL Server 2019
 	/// </summary>
 	public static class DatabaseManager
 	{
-		// Проверка доступности подключения к базе данных MSSQL
+		// Проверка доступности подключения к серверу базы данных MSSQL
 		public static bool TestConnection(string connectionString)
 		{
-			// TODO (Участник 2): Реализовать расширенную диагностику подключения к серверу и валидацию прав пользователя
 			try
 			{
 				using (SqlConnection connection = new SqlConnection(connectionString))
@@ -32,8 +31,6 @@ namespace CertHarvester
 		// Проверка существования целевой таблицы в БД и ее автоматическое создание при отсутствии
 		public static void EnsureTableExists(SqlConnection connection, string tableName)
 		{
-			// TODO (Участник 2): Добавить создание индексов по полям OwnerName и Issuer для ускорения поиска
-			// Проверка существования таблицы через системное представление INFORMATION_SCHEMA.TABLES
 			string checkTableQuery = @"
 				IF NOT EXISTS (
 					SELECT * FROM INFORMATION_SCHEMA.TABLES 
@@ -55,15 +52,13 @@ namespace CertHarvester
 			{
 				command.Parameters.Add(new SqlParameter("@TargetTableName", tableName));
 				command.ExecuteNonQuery();
-				Logger.LogInfo("Проверка структуры БД выполнена. Таблица '" + tableName + "' готова к работе");
+				Logger.LogInfo("Проверка структуры базы данных выполнена. Таблица '" + tableName + "' готова к записи данных");
 			}
 		}
 
 		// Сохранение списка сертификатов в БД с проверкой дубликатов (UPDATE при наличии, INSERT при отсутствии)
 		public static int SaveCertificates(List<CertificateRecord> certificates, string connectionString, string tableName = "Certificates")
 		{
-			// TODO (Участник 2): Реализовать пакетную вставку через SqlBulkCopy или SqlTransaction для ускорения записи большого числа строк
-			// TODO (Участник 2): Обеспечить ведение истории изменений версий сертификатов в отдельной таблице аудита
 			if (certificates == null || certificates.Count == 0)
 			{
 				Logger.LogInfo("Список сертификатов для записи в БД пуст");
@@ -82,12 +77,12 @@ namespace CertHarvester
 					// 1. Обязательная проверка существования таблицы и создание при необходимости
 					EnsureTableExists(connection, tableName);
 
-					// 2. Построчная обработка каждого сертификата с проверкой на дублирование
+					// 2. Построчная обработка каждого сертификата с защитой от дублирования
 					for (int i = 0; i < certificates.Count; i++)
 					{
 						CertificateRecord cert = certificates[i];
 						bool isSaved = UpsertCertificateRecord(connection, cert, tableName);
-						if (isSaved)
+						if (isSaved == true)
 						{
 							processedCount = processedCount + 1;
 						}
@@ -108,7 +103,7 @@ namespace CertHarvester
 			return processedCount;
 		}
 
-		// Вставка новой записи либо обновление существующей строки по уникальному серийному номеру
+		// Вставка новой записи либо обновление существующей строки по уникальному серийному номеру без дублирования
 		private static bool UpsertCertificateRecord(SqlConnection connection, CertificateRecord record, string tableName)
 		{
 			try
@@ -126,9 +121,9 @@ namespace CertHarvester
 
 				DateTime currentTimestamp = DateTime.Now;
 
-				if (recordExists)
+				if (recordExists == true)
 				{
-					// Если сертификат уже существует, обновляем данные и дату обновления
+					// Если сертификат уже существует, обновляем данные и актуализируем дату обновления
 					string updateQuery = @"
 						UPDATE [dbo].[" + tableName + @"] 
 						SET [DateUpdated] = @DateUpdated,

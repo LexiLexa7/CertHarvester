@@ -5,18 +5,16 @@ using System.Text;
 namespace CertHarvester
 {
 	/// <summary>
-	/// Класс системы логирования событий и ошибок приложения в файл и консоль (Зона ответственности: Участник 2)
+	/// Класс подсистемы логирования событий, действий пользователя и возникающих исключений
 	/// </summary>
 	public static class Logger
 	{
 		private static readonly object SyncLock = new object();
 		private static readonly string LogFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CertHarvester.log");
 
-		// Запись информационного сообщения в журнал и вывод в консоль
+		// Запись информационного сообщения в журнал и вывод в стандартный поток консоли
 		public static void LogInfo(string message)
 		{
-			// TODO (Участник 2): Реализовать настройку уровня логирования через конфигурационный файл
-			// TODO (Участник 2): Добавить поддержку ротации лог-файлов по достижении заданного размера
 			string timestamp = DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff");
 			string logRecord = timestamp + " - " + message;
 
@@ -35,14 +33,15 @@ namespace CertHarvester
 			}
 		}
 
-		// Запись предупреждающего сообщения в журнал
+		// Запись предупреждающего сообщения о некритичных сбоях или недоступности ресурсов
 		public static void LogWarning(string message)
 		{
-			// TODO (Участник 2): Добавить выделение предупреждений цветом в консоли и разделение потоков вывода
 			string timestamp = DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff");
 			string logRecord = timestamp + " - ВНИМАНИЕ: " + message;
 
+			Console.ForegroundColor = ConsoleColor.Yellow;
 			Console.WriteLine(logRecord);
+			Console.ResetColor();
 
 			lock (SyncLock)
 			{
@@ -57,11 +56,9 @@ namespace CertHarvester
 			}
 		}
 
-		// Запись ошибки и сведений об исключении (Exception) в файл журнала
+		// Запись сведений об ошибке и перехваченном исключении (Exception) в файл журнала
 		public static void LogError(string message, Exception exception = null)
 		{
-			// TODO (Участник 2): Расширить детализацию исключений, включая StackTrace, TargetSite и InnerExceptions
-			// TODO (Участник 2): Обеспечить отдельный файл error.log для критических сбоев при необходимости
 			string timestamp = DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff");
 			string details = exception != null ? " Ошибка: " + exception.Message + " | Стек: " + exception.StackTrace : string.Empty;
 			string logRecord = timestamp + " - ОШИБКА: " + message + details;
@@ -83,10 +80,9 @@ namespace CertHarvester
 			}
 		}
 
-		// Получение абсолютного пути к текущему файлу журнала
+		// Получение абсолютного пути к активному файлу журнала событий
 		public static string GetLogFilePath()
 		{
-			// Возвращает путь к активному файлу журнала
 			return LogFilePath;
 		}
 	}

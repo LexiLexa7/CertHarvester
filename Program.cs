@@ -5,7 +5,7 @@ using System.Windows.Forms;
 namespace CertHarvester
 {
 	/// <summary>
-	/// Главная точка входа в приложение CertHarvester (Зона ответственности: Тимлид)
+	/// Главная точка входа в приложение CertHarvester
 	/// </summary>
 	public static class Program
 	{
