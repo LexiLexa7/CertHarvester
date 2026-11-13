@@ -1,0 +1,189 @@
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Data.SqlClient;
+
+namespace CertHarvester
+{
+	/// <summary>
+	/// Класс управления взаимодействием с базой данных Microsoft SQL Server 2019 (Зона ответственности: Участник 2)
+	/// </summary>
+	public static class DatabaseManager
+	{
+		// Проверка доступности подключения к базе данных MSSQL
+		public static bool TestConnection(string connectionString)
+		{
+			// TODO (Участник 2): Реализовать расширенную диагностику подключения к серверу и валидацию прав пользователя
+			try
+			{
+				using (SqlConnection connection = new SqlConnection(connectionString))
+				{
+					connection.Open();
+					return connection.State == ConnectionState.Open;
+				}
+			}
+			catch (Exception ex)
+			{
+				Logger.LogError("Сбой проверки соединения с базой данных MSSQL: " + ex.Message, ex);
+				return false;
+			}
+		}
+
+		// Проверка существования целевой таблицы в БД и ее автоматическое создание при отсутствии
+		public static void EnsureTableExists(SqlConnection connection, string tableName)
+		{
+			// TODO (Участник 2): Добавить создание индексов по полям OwnerName и Issuer для ускорения поиска
+			// Проверка существования таблицы через системное представление INFORMATION_SCHEMA.TABLES
+			string checkTableQuery = @"
+				IF NOT EXISTS (
+					SELECT * FROM INFORMATION_SCHEMA.TABLES 
+					WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = @TargetTableName
+				)
+				BEGIN
+					CREATE TABLE [dbo].[" + tableName + @"] (
+						[SerialNumber] NVARCHAR(100) NOT NULL PRIMARY KEY,
+						[DateInserted] DATETIME NOT NULL,
+						[DateUpdated] DATETIME NOT NULL,
+						[OwnerName] NVARCHAR(500) NULL,
+						[Issuer] NVARCHAR(500) NULL,
+						[CryptoProVersion] NVARCHAR(100) NULL,
+						[HasEmbeddedLicense] BIT NOT NULL
+					);
+				END";
+
+			using (SqlCommand command = new SqlCommand(checkTableQuery, connection))
+			{
+				command.Parameters.Add(new SqlParameter("@TargetTableName", tableName));
+				command.ExecuteNonQuery();
+				Logger.LogInfo("Проверка структуры БД выполнена. Таблица '" + tableName + "' готова к работе");
+			}
+		}
+
+		// Сохранение списка сертификатов в БД с проверкой дубликатов (UPDATE при наличии, INSERT при отсутствии)
+		public static int SaveCertificates(List<CertificateRecord> certificates, string connectionString, string tableName = "Certificates")
+		{
+			// TODO (Участник 2): Реализовать пакетную вставку через SqlBulkCopy или SqlTransaction для ускорения записи большого числа строк
+			// TODO (Участник 2): Обеспечить ведение истории изменений версий сертификатов в отдельной таблице аудита
+			if (certificates == null || certificates.Count == 0)
+			{
+				Logger.LogInfo("Список сертификатов для записи в БД пуст");
+				return 0;
+			}
+
+			int processedCount = 0;
+
+			try
+			{
+				using (SqlConnection connection = new SqlConnection(connectionString))
+				{
+					connection.Open();
+					Logger.LogInfo("Успешное подключение к СУБД MSSQL для синхронизации сертификатов");
+
+					// 1. Обязательная проверка существования таблицы и создание при необходимости
+					EnsureTableExists(connection, tableName);
+
+					// 2. Построчная обработка каждого сертификата с проверкой на дублирование
+					for (int i = 0; i < certificates.Count; i++)
+					{
+						CertificateRecord cert = certificates[i];
+						bool isSaved = UpsertCertificateRecord(connection, cert, tableName);
+						if (isSaved)
+						{
+							processedCount = processedCount + 1;
+						}
+					}
+				}
+
+				Logger.LogInfo("Синхронизация с БД MSSQL успешно завершена. Обработано записей: " + processedCount);
+			}
+			catch (SqlException sqlEx)
+			{
+				Logger.LogError("Сбой SQL Server при сохранении сертификатов: " + sqlEx.Message, sqlEx);
+			}
+			catch (Exception ex)
+			{
+				Logger.LogError("Непредвиденная ошибка в модуле DatabaseManager: " + ex.Message, ex);
+			}
+
+			return processedCount;
+		}
+
+		// Вставка новой записи либо обновление существующей строки по уникальному серийному номеру
+		private static bool UpsertCertificateRecord(SqlConnection connection, CertificateRecord record, string tableName)
+		{
+			try
+			{
+				// Проверка наличия записи с данным серийным номером в таблице
+				string selectQuery = "SELECT COUNT(*) FROM [dbo].[" + tableName + "] WHERE [SerialNumber] = @SerialNumber";
+				bool recordExists = false;
+
+				using (SqlCommand checkCmd = new SqlCommand(selectQuery, connection))
+				{
+					checkCmd.Parameters.Add(new SqlParameter("@SerialNumber", record.SerialNumber));
+					int count = Convert.ToInt32(checkCmd.ExecuteScalar());
+					recordExists = count > 0;
+				}
+
+				DateTime currentTimestamp = DateTime.Now;
+
+				if (recordExists)
+				{
+					// Если сертификат уже существует, обновляем данные и дату обновления
+					string updateQuery = @"
+						UPDATE [dbo].[" + tableName + @"] 
+						SET [DateUpdated] = @DateUpdated,
+						    [OwnerName] = @OwnerName,
+						    [Issuer] = @Issuer,
+						    [CryptoProVersion] = @CryptoProVersion,
+						    [HasEmbeddedLicense] = @HasEmbeddedLicense
+						WHERE [SerialNumber] = @SerialNumber";
+
+					using (SqlCommand updateCmd = new SqlCommand(updateQuery, connection))
+					{
+						updateCmd.Parameters.Add(new SqlParameter("@SerialNumber", record.SerialNumber));
+						updateCmd.Parameters.Add(new SqlParameter("@DateUpdated", currentTimestamp));
+						updateCmd.Parameters.Add(new SqlParameter("@OwnerName", (object)record.OwnerName ?? DBNull.Value));
+						updateCmd.Parameters.Add(new SqlParameter("@Issuer", (object)record.Issuer ?? DBNull.Value));
+						updateCmd.Parameters.Add(new SqlParameter("@CryptoProVersion", (object)record.CryptoProVersion ?? DBNull.Value));
+						updateCmd.Parameters.Add(new SqlParameter("@HasEmbeddedLicense", record.HasEmbeddedLicense));
+
+						updateCmd.ExecuteNonQuery();
+					}
+
+					Logger.LogInfo("Обновлен существующий сертификат в БД: " + record.SerialNumber);
+				}
+				else
+				{
+					// Если сертификат новый, вставляем строку: DateUpdated строго равно DateInserted
+					string insertQuery = @"
+						INSERT INTO [dbo].[" + tableName + @"] 
+						([SerialNumber], [DateInserted], [DateUpdated], [OwnerName], [Issuer], [CryptoProVersion], [HasEmbeddedLicense])
+						VALUES 
+						(@SerialNumber, @DateInserted, @DateUpdated, @OwnerName, @Issuer, @CryptoProVersion, @HasEmbeddedLicense)";
+
+					using (SqlCommand insertCmd = new SqlCommand(insertQuery, connection))
+					{
+						insertCmd.Parameters.Add(new SqlParameter("@SerialNumber", record.SerialNumber));
+						insertCmd.Parameters.Add(new SqlParameter("@DateInserted", currentTimestamp));
+						insertCmd.Parameters.Add(new SqlParameter("@DateUpdated", currentTimestamp));
+						insertCmd.Parameters.Add(new SqlParameter("@OwnerName", (object)record.OwnerName ?? DBNull.Value));
+						insertCmd.Parameters.Add(new SqlParameter("@Issuer", (object)record.Issuer ?? DBNull.Value));
+						insertCmd.Parameters.Add(new SqlParameter("@CryptoProVersion", (object)record.CryptoProVersion ?? DBNull.Value));
+						insertCmd.Parameters.Add(new SqlParameter("@HasEmbeddedLicense", record.HasEmbeddedLicense));
+
+						insertCmd.ExecuteNonQuery();
+					}
+
+					Logger.LogInfo("Внесен новый сертификат в БД: " + record.SerialNumber);
+				}
+
+				return true;
+			}
+			catch (Exception ex)
+			{
+				Logger.LogError("Ошибка при сохранении сертификата " + record.SerialNumber + " в БД: " + ex.Message, ex);
+				return false;
+			}
+		}
+	}
+}
