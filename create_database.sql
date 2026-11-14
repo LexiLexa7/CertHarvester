@@ -33,17 +33,32 @@ GO
 -- 2. ТАБЛИЦЫ
 -- =====================================================================
 
--- Основная таблица: один сертификат = одна строка (уникальность по серийному номеру, дублей быть не может)
+-- Основная таблица строго по ТЗ (7 столбцов): один сертификат = одна строка (уникальность по SerialNumber)
 IF OBJECT_ID(N'[dbo].[Certificates]', N'U') IS NULL
 BEGIN
 	CREATE TABLE [dbo].[Certificates] (
-		[SerialNumber] NVARCHAR(100) NOT NULL PRIMARY KEY,   -- серийный номер сертификата
-		[DateInserted] DATETIME NOT NULL,                    -- дата и время первого внесения
-		[DateUpdated] DATETIME NOT NULL,                     -- дата и время последнего обновления (при первом внесении = DateInserted)
-		[OwnerName] NVARCHAR(500) NULL,                      -- имя владельца
-		[Issuer] NVARCHAR(500) NULL,                         -- удостоверяющий центр
-		[CryptoProVersion] NVARCHAR(100) NULL,               -- версия КриптоПро, если это лицензия КриптоПро
-		[HasEmbeddedLicense] BIT NOT NULL                    -- встроена ли лицензия КриптоПро в сертификат
+		[SerialNumber] NVARCHAR(128) NOT NULL PRIMARY KEY,   -- серийный номер сертификата
+		[CreatedAt] DATETIME NOT NULL,                      -- дата и время внесения записи (по ТЗ)
+		[UpdatedAt] DATETIME NOT NULL,                      -- дата и время последнего обновления (по ТЗ)
+		[OwnerName] NVARCHAR(512) NULL,                      -- имя владельца (по ТЗ)
+		[IssuerName] NVARCHAR(512) NULL,                     -- удостоверяющий центр (по ТЗ)
+		[CryptoProVersion] NVARCHAR(64) NULL,                -- версия КриптоПро CSP (по ТЗ)
+		[HasEmbeddedLicense] BIT NOT NULL                    -- наличие встроенной лицензии (по ТЗ)
+	);
+END;
+GO
+
+-- Вспомогательная таблица привязки сертификатов к компьютерам сети (нормализованная архитектура)
+IF OBJECT_ID(N'[dbo].[CertificateLocations]', N'U') IS NULL
+BEGIN
+	CREATE TABLE [dbo].[CertificateLocations] (
+		[SerialNumber] NVARCHAR(128) NOT NULL,
+		[MachineName] NVARCHAR(128) NOT NULL,
+		[MachineIp] NVARCHAR(64) NULL,
+		[SourcePath] NVARCHAR(512) NULL,
+		[LastSeenAt] DATETIME NOT NULL,
+		CONSTRAINT [PK_CertificateLocations] PRIMARY KEY ([SerialNumber], [MachineName]),
+		CONSTRAINT [FK_CertificateLocations_Certificates] FOREIGN KEY ([SerialNumber]) REFERENCES [dbo].[Certificates] ([SerialNumber]) ON DELETE CASCADE
 	);
 END;
 GO
@@ -78,13 +93,18 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Certificates_OwnerNam
 GO
 
 -- Поиск по удостоверяющему центру
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Certificates_Issuer' AND object_id = OBJECT_ID(N'[dbo].[Certificates]'))
-	CREATE NONCLUSTERED INDEX [IX_Certificates_Issuer] ON [dbo].[Certificates] ([Issuer]);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Certificates_IssuerName' AND object_id = OBJECT_ID(N'[dbo].[Certificates]'))
+	CREATE NONCLUSTERED INDEX [IX_Certificates_IssuerName] ON [dbo].[Certificates] ([IssuerName]);
 GO
 
 -- Поиск устаревших записей по дате обновления
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Certificates_DateUpdated' AND object_id = OBJECT_ID(N'[dbo].[Certificates]'))
-	CREATE NONCLUSTERED INDEX [IX_Certificates_DateUpdated] ON [dbo].[Certificates] ([DateUpdated]);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Certificates_UpdatedAt' AND object_id = OBJECT_ID(N'[dbo].[Certificates]'))
+	CREATE NONCLUSTERED INDEX [IX_Certificates_UpdatedAt] ON [dbo].[Certificates] ([UpdatedAt]);
+GO
+
+-- Индекс по локациям: поиск по компьютеру сети
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_CertificateLocations_MachineName' AND object_id = OBJECT_ID(N'[dbo].[CertificateLocations]'))
+	CREATE NONCLUSTERED INDEX [IX_CertificateLocations_MachineName] ON [dbo].[CertificateLocations] ([MachineName]);
 GO
 
 -- История по серийному номеру
@@ -94,7 +114,7 @@ GO
 
 -- Дата обновления не может быть раньше даты внесения
 IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N'CK_Certificates_Dates')
-	ALTER TABLE [dbo].[Certificates] ADD CONSTRAINT [CK_Certificates_Dates] CHECK ([DateUpdated] >= [DateInserted]);
+	ALTER TABLE [dbo].[Certificates] ADD CONSTRAINT [CK_Certificates_Dates] CHECK ([UpdatedAt] >= [CreatedAt]);
 GO
 
 
@@ -102,20 +122,25 @@ GO
 -- 4. ПРЕДСТАВЛЕНИЯ (VIEWS) ДЛЯ ОТЧЁТОВ
 -- =====================================================================
 
--- Все сертификаты в удобном виде: текст вместо 0/1 и сколько дней данные не обновлялись
+-- Все сертификаты в удобном виде с привязкой к компьютерам сети (LEFT JOIN)
 CREATE OR ALTER VIEW [dbo].[vw_CertificatesFull]
 AS
 SELECT
-	[SerialNumber],
-	[OwnerName],
-	[Issuer],
-	[CryptoProVersion],
-	[HasEmbeddedLicense],
-	CASE WHEN [HasEmbeddedLicense] = 1 THEN N'Да' ELSE N'Нет' END AS [EmbeddedLicenseText],
-	[DateInserted],
-	[DateUpdated],
-	DATEDIFF(DAY, [DateUpdated], GETDATE()) AS [DaysSinceUpdate]
-FROM [dbo].[Certificates];
+	c.[SerialNumber],
+	c.[OwnerName],
+	c.[IssuerName],
+	c.[CryptoProVersion],
+	c.[HasEmbeddedLicense],
+	CASE WHEN c.[HasEmbeddedLicense] = 1 THEN N'Да' ELSE N'Нет' END AS [EmbeddedLicenseText],
+	c.[CreatedAt],
+	c.[UpdatedAt],
+	DATEDIFF(DAY, c.[UpdatedAt], GETDATE()) AS [DaysSinceUpdate],
+	loc.[MachineName],
+	loc.[MachineIp],
+	loc.[SourcePath],
+	loc.[LastSeenAt]
+FROM [dbo].[Certificates] c
+LEFT JOIN [dbo].[CertificateLocations] loc ON c.[SerialNumber] = loc.[SerialNumber];
 GO
 
 -- Только лицензии КриптоПро (там, где указана версия)
@@ -124,10 +149,10 @@ AS
 SELECT
 	[SerialNumber],
 	[OwnerName],
-	[Issuer],
+	[IssuerName],
 	[CryptoProVersion],
 	[HasEmbeddedLicense],
-	[DateUpdated]
+	[UpdatedAt]
 FROM [dbo].[Certificates]
 WHERE [CryptoProVersion] IS NOT NULL;
 GO
@@ -136,12 +161,12 @@ GO
 CREATE OR ALTER VIEW [dbo].[vw_IssuerStatistics]
 AS
 SELECT
-	ISNULL([Issuer], N'(не указан)') AS [Issuer],
+	ISNULL([IssuerName], N'(не указан)') AS [IssuerName],
 	COUNT(*) AS [CertificatesCount],
 	SUM(CASE WHEN [HasEmbeddedLicense] = 1 THEN 1 ELSE 0 END) AS [WithEmbeddedLicenseCount],
-	MAX([DateUpdated]) AS [LastUpdate]
+	MAX([UpdatedAt]) AS [LastUpdate]
 FROM [dbo].[Certificates]
-GROUP BY ISNULL([Issuer], N'(не указан)');
+GROUP BY ISNULL([IssuerName], N'(не указан)');
 GO
 
 -- Журнал изменений сертификатов: что было и что стало
@@ -169,13 +194,11 @@ GO
 
 -- Вставка нового сертификата или обновление существующего (по серийному номеру, без дублей).
 -- Если данные изменились, старые значения записываются в Certificates_History.
--- Возвращает одну строку: SerialNumber и Action ('INSERTED' или 'UPDATED').
--- Пример: EXEC dbo.usp_UpsertCertificate N'0123', N'Иванов И.И.', N'УЦ Пример', N'5.0.12000', 1;
 CREATE OR ALTER PROCEDURE [dbo].[usp_UpsertCertificate]
-	@SerialNumber NVARCHAR(100),
-	@OwnerName NVARCHAR(500) = NULL,
-	@Issuer NVARCHAR(500) = NULL,
-	@CryptoProVersion NVARCHAR(100) = NULL,
+	@SerialNumber NVARCHAR(128),
+	@OwnerName NVARCHAR(512) = NULL,
+	@IssuerName NVARCHAR(512) = NULL,
+	@CryptoProVersion NVARCHAR(64) = NULL,
 	@HasEmbeddedLicense BIT = 0
 AS
 BEGIN
@@ -193,32 +216,32 @@ BEGIN
 		[OldOwnerName], [OldIssuer], [OldCryptoProVersion], [OldHasEmbeddedLicense],
 		[NewOwnerName], [NewIssuer], [NewCryptoProVersion], [NewHasEmbeddedLicense])
 	SELECT existing.[SerialNumber], @CurrentTimestamp,
-		existing.[OwnerName], existing.[Issuer], existing.[CryptoProVersion], existing.[HasEmbeddedLicense],
-		@OwnerName, @Issuer, @CryptoProVersion, @HasEmbeddedLicense
+		existing.[OwnerName], existing.[IssuerName], existing.[CryptoProVersion], existing.[HasEmbeddedLicense],
+		@OwnerName, @IssuerName, @CryptoProVersion, @HasEmbeddedLicense
 	FROM [dbo].[Certificates] AS existing WITH (UPDLOCK, HOLDLOCK)
 	WHERE existing.[SerialNumber] = @SerialNumber
 		AND EXISTS (
-			SELECT existing.[OwnerName], existing.[Issuer], existing.[CryptoProVersion], existing.[HasEmbeddedLicense]
+			SELECT existing.[OwnerName], existing.[IssuerName], existing.[CryptoProVersion], existing.[HasEmbeddedLicense]
 			EXCEPT
-			SELECT @OwnerName, @Issuer, @CryptoProVersion, @HasEmbeddedLicense
+			SELECT @OwnerName, @IssuerName, @CryptoProVersion, @HasEmbeddedLicense
 		);
 
 	-- Пробуем обновить существующую строку
 	UPDATE [dbo].[Certificates]
-	SET [DateUpdated] = @CurrentTimestamp,
+	SET [UpdatedAt] = @CurrentTimestamp,
 		[OwnerName] = @OwnerName,
-		[Issuer] = @Issuer,
+		[IssuerName] = @IssuerName,
 		[CryptoProVersion] = @CryptoProVersion,
 		[HasEmbeddedLicense] = @HasEmbeddedLicense
 	WHERE [SerialNumber] = @SerialNumber;
 
-	-- Если обновлять было нечего, вставляем новую строку (DateUpdated = DateInserted)
+	-- Если обновлять было нечего, вставляем новую строку
 	IF @@ROWCOUNT = 0
 	BEGIN
 		INSERT INTO [dbo].[Certificates]
-			([SerialNumber], [DateInserted], [DateUpdated], [OwnerName], [Issuer], [CryptoProVersion], [HasEmbeddedLicense])
+			([SerialNumber], [CreatedAt], [UpdatedAt], [OwnerName], [IssuerName], [CryptoProVersion], [HasEmbeddedLicense])
 		VALUES
-			(@SerialNumber, @CurrentTimestamp, @CurrentTimestamp, @OwnerName, @Issuer, @CryptoProVersion, @HasEmbeddedLicense);
+			(@SerialNumber, @CurrentTimestamp, @CurrentTimestamp, @OwnerName, @IssuerName, @CryptoProVersion, @HasEmbeddedLicense);
 
 		SET @ActionName = N'INSERTED';
 	END;
@@ -230,33 +253,31 @@ END;
 GO
 
 -- Список сертификатов, данные по которым не обновлялись заданное число дней (по умолчанию 30).
--- Пример: EXEC dbo.usp_GetStaleCertificates @DaysWithoutUpdate = 60;
 CREATE OR ALTER PROCEDURE [dbo].[usp_GetStaleCertificates]
 	@DaysWithoutUpdate INT = 30
 AS
 BEGIN
 	SET NOCOUNT ON;
 
-	SELECT [SerialNumber], [OwnerName], [Issuer], [DateUpdated],
-		DATEDIFF(DAY, [DateUpdated], GETDATE()) AS [DaysSinceUpdate]
+	SELECT [SerialNumber], [OwnerName], [IssuerName], [UpdatedAt],
+		DATEDIFF(DAY, [UpdatedAt], GETDATE()) AS [DaysSinceUpdate]
 	FROM [dbo].[Certificates]
-	WHERE [DateUpdated] < DATEADD(DAY, -@DaysWithoutUpdate, GETDATE())
-	ORDER BY [DateUpdated];
+	WHERE [UpdatedAt] < DATEADD(DAY, -@DaysWithoutUpdate, GETDATE())
+	ORDER BY [UpdatedAt];
 END;
 GO
 
 -- Поиск сертификатов по части имени владельца или названия УЦ.
--- Пример: EXEC dbo.usp_SearchCertificates @SearchText = N'Иванов';
 CREATE OR ALTER PROCEDURE [dbo].[usp_SearchCertificates]
 	@SearchText NVARCHAR(200)
 AS
 BEGIN
 	SET NOCOUNT ON;
 
-	SELECT [SerialNumber], [OwnerName], [Issuer], [CryptoProVersion], [HasEmbeddedLicense], [DateInserted], [DateUpdated]
+	SELECT [SerialNumber], [OwnerName], [IssuerName], [CryptoProVersion], [HasEmbeddedLicense], [CreatedAt], [UpdatedAt]
 	FROM [dbo].[Certificates]
 	WHERE [OwnerName] LIKE N'%' + @SearchText + N'%'
-		OR [Issuer] LIKE N'%' + @SearchText + N'%'
+		OR [IssuerName] LIKE N'%' + @SearchText + N'%'
 	ORDER BY [OwnerName];
 END;
 GO
@@ -265,18 +286,13 @@ GO
 -- =====================================================================
 -- 6. РОЛЬ ДЛЯ УЧЁТНОЙ ЗАПИСИ ПРОГРАММЫ
 -- =====================================================================
--- Роль с минимальными правами: читать, вставлять, обновлять, создавать таблицы в схеме dbo.
--- Пароли в git не хранятся. Чтобы подключить пользователя, выполни отдельно (подставь свои данные):
---     CREATE LOGIN [certharvester_app] WITH PASSWORD = N'<придумай пароль>';
---     CREATE USER [certharvester_app] FOR LOGIN [certharvester_app];
---     ALTER ROLE [CertHarvesterAppRole] ADD MEMBER [certharvester_app];
 IF DATABASE_PRINCIPAL_ID(N'CertHarvesterAppRole') IS NULL
 BEGIN
 	CREATE ROLE [CertHarvesterAppRole];
 END;
 GO
 
-GRANT SELECT, INSERT, UPDATE, EXECUTE ON SCHEMA::[dbo] TO [CertHarvesterAppRole];
+GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON SCHEMA::[dbo] TO [CertHarvesterAppRole];
 GRANT CREATE TABLE TO [CertHarvesterAppRole];
 GRANT ALTER ON SCHEMA::[dbo] TO [CertHarvesterAppRole];
 GO
@@ -286,7 +302,7 @@ GO
 -- 7. ТЕСТОВЫЕ ДАННЫЕ (вымышленные), добавляются только если такого серийного номера ещё нет
 -- =====================================================================
 INSERT INTO [dbo].[Certificates]
-	([SerialNumber], [DateInserted], [DateUpdated], [OwnerName], [Issuer], [CryptoProVersion], [HasEmbeddedLicense])
+	([SerialNumber], [CreatedAt], [UpdatedAt], [OwnerName], [IssuerName], [CryptoProVersion], [HasEmbeddedLicense])
 SELECT testData.*
 FROM (VALUES
 	(N'01A2B3C4D5E6F70811223344', DATEADD(DAY, -120, GETDATE()), DATEADD(DAY, -2, GETDATE()),   N'Иванов Иван Иванович',          N'АО "Тестовый удостоверяющий центр"', N'5.0.12000', CAST(1 AS BIT)),
@@ -301,9 +317,25 @@ FROM (VALUES
 	(N'0A3B4C5D6E7F80919AABBCCD', DATEADD(DAY, -30, GETDATE()),  DATEADD(DAY, -30, GETDATE()),  N'Волкова Татьяна Андреевна',     N'АО "Тестовый удостоверяющий центр"', NULL,         CAST(0 AS BIT)),
 	(N'0B4C5D6E7F8091A2ABBCCDDE', DATEADD(DAY, -20, GETDATE()),  DATEADD(DAY, -1, GETDATE()),   N'Алексеев Роман Евгеньевич',     N'ООО "УЦ Пример"',                    N'5.0.11998', CAST(1 AS BIT)),
 	(N'0C5D6E7F8091A2B3BBCCDDEF', DATEADD(DAY, -10, GETDATE()),  DATEADD(DAY, -10, GETDATE()),  N'Лебедева Ксения Романовна',     N'ФГУП "ГРЧЦ" (тестовый УЦ)',          NULL,         CAST(0 AS BIT))
-) AS testData ([SerialNumber], [DateInserted], [DateUpdated], [OwnerName], [Issuer], [CryptoProVersion], [HasEmbeddedLicense])
+) AS testData ([SerialNumber], [CreatedAt], [UpdatedAt], [OwnerName], [IssuerName], [CryptoProVersion], [HasEmbeddedLicense])
 WHERE NOT EXISTS (
 	SELECT 1 FROM [dbo].[Certificates] AS existing WHERE existing.[SerialNumber] = testData.[SerialNumber]
+);
+GO
+
+-- Добавление тестовых привязок сертификатов к компьютерам сети
+INSERT INTO [dbo].[CertificateLocations]
+	([SerialNumber], [MachineName], [MachineIp], [SourcePath], [LastSeenAt])
+SELECT locData.*
+FROM (VALUES
+	(N'01A2B3C4D5E6F70811223344', N'DESKTOP-R10QO9B', N'127.0.0.1', N'[Хранилище: CurrentUser\My]', GETDATE()),
+	(N'01A2B3C4D5E6F70811223344', N'PC-NODE-1', N'192.168.1.101', N'[Реестр: HKLM\Crypto Pro\Settings\Keys]', GETDATE()),
+	(N'02B3C4D5E6F7081922334455', N'DESKTOP-R10QO9B', N'127.0.0.1', N'[Хранилище: CurrentUser\My]', GETDATE()),
+	(N'04D5E6F708192A3B44556677', N'PC-NODE-2', N'192.168.1.102', N'[Хранилище: LocalMachine\My]', GETDATE())
+) AS locData ([SerialNumber], [MachineName], [MachineIp], [SourcePath], [LastSeenAt])
+WHERE NOT EXISTS (
+	SELECT 1 FROM [dbo].[CertificateLocations] AS existing 
+	WHERE existing.[SerialNumber] = locData.[SerialNumber] AND existing.[MachineName] = locData.[MachineName]
 );
 GO
 
@@ -329,7 +361,7 @@ GO
 -- =====================================================================
 -- 8. ПРОВЕРКА: что получилось (можно выделить любой запрос и нажать F5)
 -- =====================================================================
-SELECT * FROM [dbo].[vw_CertificatesFull] ORDER BY [DateUpdated] DESC;
+SELECT * FROM [dbo].[vw_CertificatesFull] ORDER BY [UpdatedAt] DESC;
 SELECT * FROM [dbo].[vw_IssuerStatistics];
 SELECT * FROM [dbo].[vw_CryptoProLicenses];
 SELECT * FROM [dbo].[vw_CertificateChanges];

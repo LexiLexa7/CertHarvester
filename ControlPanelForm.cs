@@ -58,6 +58,7 @@ namespace CertHarvester
 		public string CryptoProVersion { get; set; }
 		public bool HasEmbeddedLicense { get; set; }
 		public string LicenseDisplay { get { return HasEmbeddedLicense ? "●  Да" : "○  Нет"; } }
+		public string ComputerSourceDisplay { get; set; }
 		public CertificateRecord Record { get; set; }
 
 		// Конструктор адаптера записи сертификата
@@ -65,12 +66,38 @@ namespace CertHarvester
 		{
 			Record = record;
 			SerialNumber = record.SerialNumber ?? string.Empty;
-			DateInsertedDisplay = record.DateInserted.ToString("dd.MM.yy HH:mm:ss");
-			DateUpdatedDisplay = record.DateUpdated.ToString("dd.MM.yy HH:mm:ss");
+			DateInsertedDisplay = record.CreatedAt.ToString("dd.MM.yy HH:mm:ss");
+			DateUpdatedDisplay = record.UpdatedAt.ToString("dd.MM.yy HH:mm:ss");
 			OwnerName = record.OwnerName ?? string.Empty;
-			Issuer = record.Issuer ?? string.Empty;
+			Issuer = !string.IsNullOrEmpty(record.IssuerName) ? record.IssuerName : (record.Issuer ?? string.Empty);
 			CryptoProVersion = string.IsNullOrEmpty(record.CryptoProVersion) ? "—" : record.CryptoProVersion;
 			HasEmbeddedLicense = record.HasEmbeddedLicense;
+
+			if (record.Locations != null && record.Locations.Count > 1)
+			{
+				List<string> uniqueNames = new List<string>();
+				for (int l = 0; l < record.Locations.Count; l++)
+				{
+					string mName = record.Locations[l].MachineName;
+					if (!string.IsNullOrEmpty(mName) && !uniqueNames.Contains(mName))
+					{
+						uniqueNames.Add(mName);
+					}
+				}
+				ComputerSourceDisplay = string.Format("На {0} ПК ({1})", uniqueNames.Count, string.Join(", ", uniqueNames));
+			}
+			else if (record.Locations != null && record.Locations.Count == 1)
+			{
+				string mName = !string.IsNullOrEmpty(record.Locations[0].MachineName) ? record.Locations[0].MachineName : record.MachineName;
+				string src = !string.IsNullOrEmpty(record.Locations[0].SourcePath) ? record.Locations[0].SourcePath : record.SourcePath;
+				ComputerSourceDisplay = string.Format("{0} ({1})", mName, src);
+			}
+			else
+			{
+				string mName = !string.IsNullOrEmpty(record.MachineName) ? record.MachineName : "—";
+				string src = !string.IsNullOrEmpty(record.SourcePath) ? record.SourcePath : "—";
+				ComputerSourceDisplay = string.Format("{0} ({1})", mName, src);
+			}
 		}
 	}
 
@@ -110,6 +137,22 @@ namespace CertHarvester
 		private System.Windows.Controls.CheckBox _checkAutoCreateTable;
 		private System.Windows.Controls.Button _buttonSaveDbSettings;
 		private System.Windows.Controls.Button _buttonClearDbTable;
+		private System.Windows.Controls.Button _buttonLoadFromDb;
+
+		// Интерактивная фильтрация по компьютеру сети
+		private string _selectedComputerFilter;
+
+		// Быстрые кнопки-переключатели фильтрации
+		private enum QuickFilterMode
+		{
+			All,
+			CryptoProGost,
+			HideSystemUuid
+		}
+		private QuickFilterMode _currentQuickFilter = QuickFilterMode.All;
+		private System.Windows.Controls.Button _buttonQuickFilterAll;
+		private System.Windows.Controls.Button _buttonQuickFilterCrypto;
+		private System.Windows.Controls.Button _buttonQuickFilterNoUuid;
 
 		// Элементы главной области
 		private TextBlock _labelMainHeader;
@@ -378,6 +421,16 @@ namespace CertHarvester
 			_buttonSaveDbSettings.Click += ButtonSaveDbSettings_Click;
 			dbBlock.Children.Add(_buttonSaveDbSettings);
 
+			// Кнопка загрузки данных из БД через LEFT JOIN
+			_buttonLoadFromDb = new System.Windows.Controls.Button();
+			_buttonLoadFromDb.Content = "📥   Загрузить данные из БД";
+			_buttonLoadFromDb.Height = 30;
+			_buttonLoadFromDb.Margin = new Thickness(0, 6, 0, 0);
+			_buttonLoadFromDb.Cursor = System.Windows.Input.Cursors.Hand;
+			_buttonLoadFromDb.FontWeight = FontWeights.SemiBold;
+			_buttonLoadFromDb.Click += ButtonLoadFromDb_Click;
+			dbBlock.Children.Add(_buttonLoadFromDb);
+
 			// Кнопка полной очистки таблицы в БД
 			_buttonClearDbTable = new System.Windows.Controls.Button();
 			_buttonClearDbTable.Content = "🗑   Очистить таблицу в БД";
@@ -603,26 +656,56 @@ namespace CertHarvester
 			return card;
 		}
 
-		// Создание панели с поисковой строкой и кнопкой фильтрации
+		// Создание панели с поисковой строкой и быстрыми переключателями фильтрации
 		private DockPanel CreateSearchAndFilterBar()
 		{
 			DockPanel panel = new DockPanel();
 
+			// Справа: быстрые кнопки-переключатели фильтрации
+			StackPanel quickFilterStack = new StackPanel();
+			quickFilterStack.Orientation = System.Windows.Controls.Orientation.Horizontal;
+			quickFilterStack.VerticalAlignment = VerticalAlignment.Center;
+			DockPanel.SetDock(quickFilterStack, System.Windows.Controls.Dock.Right);
+
+			_buttonQuickFilterAll = new System.Windows.Controls.Button();
+			_buttonQuickFilterAll.Content = "Все";
+			_buttonQuickFilterAll.Height = 34;
+			_buttonQuickFilterAll.Padding = new Thickness(14, 0, 14, 0);
+			_buttonQuickFilterAll.Margin = new Thickness(6, 0, 0, 0);
+			_buttonQuickFilterAll.Cursor = System.Windows.Input.Cursors.Hand;
+			HandyControl.Controls.BorderElement.SetCornerRadius(_buttonQuickFilterAll, new CornerRadius(6));
+			_buttonQuickFilterAll.Click += (s, e) => SetQuickFilter(QuickFilterMode.All);
+			quickFilterStack.Children.Add(_buttonQuickFilterAll);
+
+			_buttonQuickFilterCrypto = new System.Windows.Controls.Button();
+			_buttonQuickFilterCrypto.Content = "Только КриптоПро / ГОСТ";
+			_buttonQuickFilterCrypto.Height = 34;
+			_buttonQuickFilterCrypto.Padding = new Thickness(14, 0, 14, 0);
+			_buttonQuickFilterCrypto.Margin = new Thickness(6, 0, 0, 0);
+			_buttonQuickFilterCrypto.Cursor = System.Windows.Input.Cursors.Hand;
+			HandyControl.Controls.BorderElement.SetCornerRadius(_buttonQuickFilterCrypto, new CornerRadius(6));
+			_buttonQuickFilterCrypto.Click += (s, e) => SetQuickFilter(QuickFilterMode.CryptoProGost);
+			quickFilterStack.Children.Add(_buttonQuickFilterCrypto);
+
+			_buttonQuickFilterNoUuid = new System.Windows.Controls.Button();
+			_buttonQuickFilterNoUuid.Content = "Без системных UUID";
+			_buttonQuickFilterNoUuid.Height = 34;
+			_buttonQuickFilterNoUuid.Padding = new Thickness(14, 0, 14, 0);
+			_buttonQuickFilterNoUuid.Margin = new Thickness(6, 0, 0, 0);
+			_buttonQuickFilterNoUuid.Cursor = System.Windows.Input.Cursors.Hand;
+			HandyControl.Controls.BorderElement.SetCornerRadius(_buttonQuickFilterNoUuid, new CornerRadius(6));
+			_buttonQuickFilterNoUuid.Click += (s, e) => SetQuickFilter(QuickFilterMode.HideSystemUuid);
+			quickFilterStack.Children.Add(_buttonQuickFilterNoUuid);
+
+			panel.Children.Add(quickFilterStack);
+
 			_buttonFilterLicense = new System.Windows.Controls.Button();
-			_buttonFilterLicense.Content = "Только со встроенной лицензией";
-			_buttonFilterLicense.Height = 34;
-			_buttonFilterLicense.Padding = new Thickness(16, 0, 16, 0);
-			_buttonFilterLicense.Cursor = System.Windows.Input.Cursors.Hand;
-			_buttonFilterLicense.FontWeight = FontWeights.Regular;
-			_buttonFilterLicense.Click += ButtonFilterLicense_Click;
-			DockPanel.SetDock(_buttonFilterLicense, System.Windows.Controls.Dock.Right);
-			panel.Children.Add(_buttonFilterLicense);
 
 			_panelSearchContainer = new Border();
 			_panelSearchContainer.CornerRadius = new CornerRadius(8);
 			_panelSearchContainer.BorderThickness = new Thickness(1);
 			_panelSearchContainer.Height = 34;
-			_panelSearchContainer.Margin = new Thickness(0, 0, 12, 0);
+			_panelSearchContainer.Margin = new Thickness(0, 0, 6, 0);
 
 			DockPanel searchInner = new DockPanel();
 			TextBlock icon = new TextBlock() { Text = "🔍", Margin = new Thickness(10, 8, 8, 8), FontSize = 12 };
@@ -651,7 +734,7 @@ namespace CertHarvester
 			inputGrid.VerticalAlignment = VerticalAlignment.Center;
 
 			_labelSearchPlaceholder = new TextBlock();
-			_labelSearchPlaceholder.Text = "Поиск по номеру, владельцу или УЦ...";
+			_labelSearchPlaceholder.Text = "Поиск по номеру, владельцу, УЦ или ПК...";
 			_labelSearchPlaceholder.FontSize = 13;
 			_labelSearchPlaceholder.VerticalAlignment = VerticalAlignment.Center;
 			_labelSearchPlaceholder.Margin = new Thickness(14, 0, 0, 0);
@@ -732,7 +815,7 @@ namespace CertHarvester
 				Header = "Имя владельца",
 				Binding = new System.Windows.Data.Binding("OwnerName"),
 				SortMemberPath = "OwnerName",
-				Width = new DataGridLength(230),
+				Width = new DataGridLength(210),
 				MinWidth = 150
 			});
 
@@ -742,8 +825,8 @@ namespace CertHarvester
 				Header = "Удостоверяющий центр",
 				Binding = new System.Windows.Data.Binding("Issuer"),
 				SortMemberPath = "Issuer",
-				Width = new DataGridLength(210),
-				MinWidth = 150
+				Width = new DataGridLength(190),
+				MinWidth = 140
 			});
 
 			// 6. Версия КриптоПро
@@ -762,6 +845,16 @@ namespace CertHarvester
 				Binding = new System.Windows.Data.Binding("LicenseDisplay"),
 				SortMemberPath = "HasEmbeddedLicense",
 				Width = new DataGridLength(125)
+			});
+
+			// 8. Компьютер / Источник
+			grid.Columns.Add(new DataGridTextColumn()
+			{
+				Header = "Компьютер / Источник",
+				Binding = new System.Windows.Data.Binding("ComputerSourceDisplay"),
+				SortMemberPath = "ComputerSourceDisplay",
+				Width = new DataGridLength(1, DataGridLengthUnitType.Star),
+				MinWidth = 150
 			});
 
 			return grid;
@@ -858,6 +951,12 @@ namespace CertHarvester
 			_buttonSaveDbSettings.Background = isDark ? new SolidColorBrush(Color.FromRgb(55, 65, 81)) : new SolidColorBrush(Color.FromRgb(243, 244, 246));
 			_buttonSaveDbSettings.Foreground = textPrimary;
 
+			if (_buttonLoadFromDb != null)
+			{
+				_buttonLoadFromDb.Background = isDark ? new SolidColorBrush(Color.FromRgb(30, 58, 138)) : new SolidColorBrush(Color.FromRgb(239, 246, 255));
+				_buttonLoadFromDb.Foreground = isDark ? new SolidColorBrush(Color.FromRgb(147, 197, 253)) : new SolidColorBrush(Color.FromRgb(37, 99, 235));
+			}
+
 			// Главная панель
 			_labelMainHeader.Foreground = textPrimary;
 
@@ -911,6 +1010,7 @@ namespace CertHarvester
 			_panelTerminalCard.BorderBrush = isDark ? new SolidColorBrush(Color.FromRgb(55, 65, 81)) : new SolidColorBrush(Color.FromRgb(31, 41, 55));
 			_labelTerminalTitle.Foreground = textSecondary;
 
+			UpdateQuickFilterButtonStyles();
 			RenderComputersList();
 			RenderDirectoriesList();
 		}
@@ -1182,7 +1282,7 @@ namespace CertHarvester
 			_labelProgressCurrentNode.Text = totalNodes > 0 ? "Готов к запуску" : "Добавьте ПК";
 		}
 
-		// Отрисовка списка карточек компьютеров сети в левом сайдбаре
+		// Отрисовка списка карточек компьютеров сети и плашки 'Все компьютеры (Сводка)' в левом сайдбаре
 		private void RenderComputersList()
 		{
 			_panelComputersContainer.Children.Clear();
@@ -1192,16 +1292,101 @@ namespace CertHarvester
 			Brush nameText = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(243, 244, 246)) : new SolidColorBrush(Color.FromRgb(17, 24, 39));
 			Brush ipText = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(156, 163, 175)) : new SolidColorBrush(Color.FromRgb(107, 114, 128));
 
+			Brush activeBorder = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+			Brush activeBg = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(30, 58, 95)) : new SolidColorBrush(Color.FromRgb(239, 246, 255));
+
+			// 0. Плашка 'Все компьютеры (Сводка)'
+			bool isAllSelected = string.IsNullOrEmpty(_selectedComputerFilter);
+			Border allCard = new Border();
+			allCard.Background = isAllSelected ? activeBg : cardBg;
+			allCard.BorderBrush = isAllSelected ? activeBorder : cardBorder;
+			allCard.BorderThickness = new Thickness(isAllSelected ? 2 : 1);
+			allCard.CornerRadius = new CornerRadius(6);
+			allCard.Margin = new Thickness(0, 0, 0, 8);
+			allCard.Padding = new Thickness(8, 6, 8, 6);
+			allCard.Cursor = System.Windows.Input.Cursors.Hand;
+
+			DockPanel allDock = new DockPanel();
+			TextBlock allIcon = new TextBlock() { Text = "🌐", FontSize = 14, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+			DockPanel.SetDock(allIcon, System.Windows.Controls.Dock.Left);
+			allDock.Children.Add(allIcon);
+
+			Border allBadge = new Border();
+			allBadge.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+			allBadge.CornerRadius = new CornerRadius(10);
+			allBadge.Padding = new Thickness(6, 2, 6, 2);
+			allBadge.VerticalAlignment = VerticalAlignment.Center;
+			TextBlock allBadgeText = new TextBlock()
+			{
+				Text = string.Format("{0} серт.", _allCertificates != null ? _allCertificates.Count : 0),
+				FontSize = 9,
+				FontWeight = FontWeights.Bold,
+				Foreground = Brushes.White
+			};
+			allBadge.Child = allBadgeText;
+			DockPanel.SetDock(allBadge, System.Windows.Controls.Dock.Right);
+			allDock.Children.Add(allBadge);
+
+			StackPanel allTextStack = new StackPanel();
+			TextBlock allTitle = new TextBlock() { Text = "Все компьютеры (Сводка)", FontWeight = FontWeights.Bold, FontSize = 11, Foreground = nameText };
+			TextBlock allSub = new TextBlock() { Text = string.Format("Узлов в сети: {0}", _networkNodes.Count), FontSize = 10, Foreground = ipText };
+			allTextStack.Children.Add(allTitle);
+			allTextStack.Children.Add(allSub);
+			allDock.Children.Add(allTextStack);
+
+			allCard.Child = allDock;
+			allCard.MouseLeftButtonUp += (s, e) =>
+			{
+				_selectedComputerFilter = null;
+				RenderComputersList();
+				RefreshCertificatesGrid();
+			};
+			_panelComputersContainer.Children.Add(allCard);
+
+			// 1. Карточки отдельных компьютеров сети
 			for (int i = 0; i < _networkNodes.Count; i++)
 			{
 				NetworkNodeItem node = _networkNodes[i];
+				bool isSelected = !string.IsNullOrEmpty(_selectedComputerFilter) &&
+					(string.Equals(_selectedComputerFilter, node.Name, StringComparison.OrdinalIgnoreCase) ||
+					 string.Equals(_selectedComputerFilter, node.IpAddress, StringComparison.OrdinalIgnoreCase));
+
+				// Подсчет сертификатов на данном компьютере
+				int nodeCertsCount = 0;
+				if (_allCertificates != null)
+				{
+					for (int c = 0; c < _allCertificates.Count; c++)
+					{
+						if (_allCertificates[c].IsFoundOnMachine(node.Name) || _allCertificates[c].IsFoundOnMachine(node.IpAddress))
+						{
+							nodeCertsCount++;
+						}
+					}
+				}
+
 				Border itemBorder = new Border();
-				itemBorder.Background = cardBg;
-				itemBorder.BorderBrush = cardBorder;
-				itemBorder.BorderThickness = new Thickness(1);
+				itemBorder.Background = isSelected ? activeBg : cardBg;
+				itemBorder.BorderBrush = isSelected ? activeBorder : cardBorder;
+				itemBorder.BorderThickness = new Thickness(isSelected ? 2 : 1);
 				itemBorder.CornerRadius = new CornerRadius(6);
 				itemBorder.Margin = new Thickness(0, 0, 0, 6);
 				itemBorder.Padding = new Thickness(6);
+				itemBorder.Cursor = System.Windows.Input.Cursors.Hand;
+
+				// Клик мышкой по карточке выделяет её и фильтрует таблицу справа
+				itemBorder.MouseLeftButtonUp += (s, e) =>
+				{
+					if (string.Equals(_selectedComputerFilter, node.Name, StringComparison.OrdinalIgnoreCase))
+					{
+						_selectedComputerFilter = null;
+					}
+					else
+					{
+						_selectedComputerFilter = node.Name;
+					}
+					RenderComputersList();
+					RefreshCertificatesGrid();
+				};
 
 				System.Windows.Controls.ContextMenu cm = new System.Windows.Controls.ContextMenu();
 				System.Windows.Controls.MenuItem credItem = new System.Windows.Controls.MenuItem() { Header = "🔑 Учетные записи (net use)..." };
@@ -1230,10 +1415,15 @@ namespace CertHarvester
 				System.Windows.Controls.MenuItem delItem = new System.Windows.Controls.MenuItem() { Header = "Удалить компьютер" };
 				delItem.Click += (s, e) =>
 				{
+					if (string.Equals(_selectedComputerFilter, node.Name, StringComparison.OrdinalIgnoreCase))
+					{
+						_selectedComputerFilter = null;
+					}
 					_networkNodes.Remove(node);
 					SyncAndSaveComputersToConfig();
 					RenderComputersList();
 					UpdateProgressCardSummary();
+					RefreshCertificatesGrid();
 				};
 				cm.Items.Add(delItem);
 				itemBorder.ContextMenu = cm;
@@ -1243,9 +1433,32 @@ namespace CertHarvester
 				DockPanel.SetDock(icon, System.Windows.Controls.Dock.Left);
 				dock.Children.Add(icon);
 
+				// Правый блок с бейджем статуса и бейджем количества найденных сертификатов
+				StackPanel badgesStack = new StackPanel();
+				badgesStack.Orientation = System.Windows.Controls.Orientation.Vertical;
+				badgesStack.HorizontalAlignment = System.Windows.HorizontalAlignment.Right;
+				DockPanel.SetDock(badgesStack, System.Windows.Controls.Dock.Right);
+
 				Border badge = CreateStatusBadge(node.Status);
-				DockPanel.SetDock(badge, System.Windows.Controls.Dock.Right);
-				dock.Children.Add(badge);
+				badge.Margin = new Thickness(0, 0, 0, 3);
+				badgesStack.Children.Add(badge);
+
+				Border certsCountBadge = new Border();
+				certsCountBadge.Background = isSelected ? new SolidColorBrush(Color.FromRgb(37, 99, 235)) : (_isDarkTheme ? new SolidColorBrush(Color.FromRgb(55, 65, 81)) : new SolidColorBrush(Color.FromRgb(226, 232, 240)));
+				certsCountBadge.CornerRadius = new CornerRadius(8);
+				certsCountBadge.Padding = new Thickness(5, 1, 5, 1);
+				certsCountBadge.HorizontalAlignment = System.Windows.HorizontalAlignment.Right;
+				TextBlock certsBadgeTxt = new TextBlock()
+				{
+					Text = string.Format("{0} серт.", nodeCertsCount),
+					FontSize = 9,
+					FontWeight = FontWeights.SemiBold,
+					Foreground = isSelected ? Brushes.White : nameText
+				};
+				certsCountBadge.Child = certsBadgeTxt;
+				badgesStack.Children.Add(certsCountBadge);
+
+				dock.Children.Add(badgesStack);
 
 				StackPanel textStack = new StackPanel();
 				TextBlock nameBlock = new TextBlock() { Text = node.Name, FontWeight = FontWeights.Bold, FontSize = 11, Foreground = nameText };
@@ -1387,6 +1600,32 @@ namespace CertHarvester
 			{
 				CertificateRecord cert = _allCertificates[i];
 
+				// Фильтрация по выбранному компьютеру в левой панели (если выбран конкретный узел)
+				if (!string.IsNullOrEmpty(_selectedComputerFilter))
+				{
+					if (cert.IsFoundOnMachine(_selectedComputerFilter) == false)
+					{
+						continue;
+					}
+				}
+
+				// Фильтрация по кнопкам быстрого выбора (Все / Только КриптоПро-ГОСТ / Без системных UUID)
+				if (_currentQuickFilter == QuickFilterMode.CryptoProGost)
+				{
+					bool isCryptoPro = (!string.IsNullOrEmpty(cert.CryptoProVersion) && cert.CryptoProVersion != "—") || cert.HasEmbeddedLicense == true;
+					if (isCryptoPro == false)
+					{
+						continue;
+					}
+				}
+				else if (_currentQuickFilter == QuickFilterMode.HideSystemUuid)
+				{
+					if (IsSystemUuidOrTechnical(cert) == true)
+					{
+						continue;
+					}
+				}
+
 				if (_filterOnlyWithLicense == true && cert.HasEmbeddedLicense == false)
 				{
 					continue;
@@ -1397,9 +1636,11 @@ namespace CertHarvester
 					string query = _searchFilterQuery.ToLowerInvariant();
 					bool matchSerial = (cert.SerialNumber ?? string.Empty).ToLowerInvariant().Contains(query);
 					bool matchOwner = (cert.OwnerName ?? string.Empty).ToLowerInvariant().Contains(query);
-					bool matchIssuer = (cert.Issuer ?? string.Empty).ToLowerInvariant().Contains(query);
+					string issuer = !string.IsNullOrEmpty(cert.IssuerName) ? cert.IssuerName : (cert.Issuer ?? string.Empty);
+					bool matchIssuer = issuer.ToLowerInvariant().Contains(query);
+					bool matchMachine = (cert.MachineName ?? string.Empty).ToLowerInvariant().Contains(query);
 
-					if (matchSerial == false && matchOwner == false && matchIssuer == false)
+					if (matchSerial == false && matchOwner == false && matchIssuer == false && matchMachine == false)
 					{
 						continue;
 					}
@@ -1420,7 +1661,17 @@ namespace CertHarvester
 				_gridCertificates.Items.Refresh();
 			}
 
-			_labelMetricTotalNumber.Text = _allCertificates.Count.ToString();
+			if (_labelMetricTotalNumber != null)
+			{
+				_labelMetricTotalNumber.Text = _displayCertificates.Count.ToString();
+			}
+
+			if (_labelMetricTotalTitle != null)
+			{
+				_labelMetricTotalTitle.Text = string.IsNullOrEmpty(_selectedComputerFilter)
+					? "всего в сети"
+					: string.Format("найдено на {0}", _selectedComputerFilter);
+			}
 		}
 
 		// Обработчик события клика по заголовку колонки для переключения сортировки (по возрастанию / по убыванию)
@@ -1500,6 +1751,12 @@ namespace CertHarvester
 					? a.HasEmbeddedLicense.CompareTo(b.HasEmbeddedLicense) 
 					: b.HasEmbeddedLicense.CompareTo(a.HasEmbeddedLicense));
 			}
+			else if (_sortColumnKey == "ComputerSourceDisplay")
+			{
+				_displayCertificates.Sort((a, b) => _isSortAscending 
+					? string.Compare(a.ComputerSourceDisplay, b.ComputerSourceDisplay, StringComparison.CurrentCultureIgnoreCase) 
+					: string.Compare(b.ComputerSourceDisplay, a.ComputerSourceDisplay, StringComparison.CurrentCultureIgnoreCase));
+			}
 		}
 
 		// Обновление заголовков колонок таблицы с добавлением визуальной стрелочки направления сортировки (▲ / ▼)
@@ -1542,7 +1799,122 @@ namespace CertHarvester
 			if (sortMemberPath == "Issuer") return "Удостоверяющий центр";
 			if (sortMemberPath == "CryptoProVersion") return "Версия КриптоПро";
 			if (sortMemberPath == "HasEmbeddedLicense") return "Лицензия встроена";
+			if (sortMemberPath == "ComputerSourceDisplay") return "Компьютер / Источник";
 			return string.Empty;
+		}
+
+		// Установка активного быстрого фильтра и обновление отображения таблицы
+		private void SetQuickFilter(QuickFilterMode mode)
+		{
+			_currentQuickFilter = mode;
+			UpdateQuickFilterButtonStyles();
+			RefreshCertificatesGrid();
+		}
+
+		// Обновление визуального оформления кнопок быстрого фильтра (Все / КриптоПро-ГОСТ / Без системных UUID)
+		private void UpdateQuickFilterButtonStyles()
+		{
+			if (_buttonQuickFilterAll == null || _buttonQuickFilterCrypto == null || _buttonQuickFilterNoUuid == null)
+			{
+				return;
+			}
+
+			SolidColorBrush activeBg = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+			SolidColorBrush activeFg = Brushes.White;
+			SolidColorBrush inactiveBg = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(31, 41, 55)) : new SolidColorBrush(Color.FromRgb(243, 244, 246));
+			SolidColorBrush inactiveFg = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(209, 213, 219)) : new SolidColorBrush(Color.FromRgb(55, 65, 81));
+
+			_buttonQuickFilterAll.Background = _currentQuickFilter == QuickFilterMode.All ? activeBg : inactiveBg;
+			_buttonQuickFilterAll.Foreground = _currentQuickFilter == QuickFilterMode.All ? activeFg : inactiveFg;
+			_buttonQuickFilterAll.FontWeight = _currentQuickFilter == QuickFilterMode.All ? FontWeights.Bold : FontWeights.Normal;
+
+			_buttonQuickFilterCrypto.Background = _currentQuickFilter == QuickFilterMode.CryptoProGost ? activeBg : inactiveBg;
+			_buttonQuickFilterCrypto.Foreground = _currentQuickFilter == QuickFilterMode.CryptoProGost ? activeFg : inactiveFg;
+			_buttonQuickFilterCrypto.FontWeight = _currentQuickFilter == QuickFilterMode.CryptoProGost ? FontWeights.Bold : FontWeights.Normal;
+
+			_buttonQuickFilterNoUuid.Background = _currentQuickFilter == QuickFilterMode.HideSystemUuid ? activeBg : inactiveBg;
+			_buttonQuickFilterNoUuid.Foreground = _currentQuickFilter == QuickFilterMode.HideSystemUuid ? activeFg : inactiveFg;
+			_buttonQuickFilterNoUuid.FontWeight = _currentQuickFilter == QuickFilterMode.HideSystemUuid ? FontWeights.Bold : FontWeights.Normal;
+		}
+
+		// Проверка, является ли сертификат техническим системным UUID, localhost или USBHostDriver
+		private static bool IsSystemUuidOrTechnical(CertificateRecord cert)
+		{
+			if (cert == null)
+			{
+				return false;
+			}
+
+			string owner = cert.OwnerName ?? string.Empty;
+
+			if (owner.IndexOf("localhost", StringComparison.OrdinalIgnoreCase) >= 0 ||
+				owner.IndexOf("USBHostDriver", StringComparison.OrdinalIgnoreCase) >= 0 ||
+				owner.IndexOf("XBL Client IPsec", StringComparison.OrdinalIgnoreCase) >= 0)
+			{
+				return true;
+			}
+
+			if (owner.StartsWith("trust_", StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
+
+			if (System.Text.RegularExpressions.Regex.IsMatch(owner, @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))
+			{
+				return true;
+			}
+
+			return false;
+		}
+
+		// Загрузка сертификатов из базы данных MSSQL с восстановлением связей с компьютерами через LEFT JOIN
+		private async void ButtonLoadFromDb_Click(object sender, RoutedEventArgs e)
+		{
+			string server = _textSqlServer.Text.Trim();
+			string database = _textSqlDatabase.Text.Trim();
+			string table = string.IsNullOrWhiteSpace(_textSqlTable.Text) ? "Certificates" : _textSqlTable.Text.Trim();
+			string connString = string.Format("Server={0};Database={1};Integrated Security=True;", server, database);
+
+			AppendTerminalLog(string.Format("{0} - Запрос загрузки сертификатов из базы данных MSSQL ({1}.dbo.{2})...", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), database, table), Colors.White);
+
+			_buttonLoadFromDb.IsEnabled = false;
+
+			try
+			{
+				List<CertificateRecord> loadedRecords = await Task.Run(() => DatabaseManager.LoadCertificatesFromDatabase(connString, table));
+
+				if (loadedRecords != null && loadedRecords.Count > 0)
+				{
+					_allCertificates.Clear();
+					for (int i = 0; i < loadedRecords.Count; i++)
+					{
+						_allCertificates.Add(loadedRecords[i]);
+					}
+
+					_currentConfig.Certificates = new List<CertificateRecord>(_allCertificates);
+					ConfigManager.SaveConfig(_currentConfig);
+
+					RefreshCertificatesGrid();
+					RenderComputersList();
+
+					AppendTerminalLog(string.Format("{0} - Успешно загружено {1} сертификатов из базы данных MSSQL", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), loadedRecords.Count), Color.FromRgb(52, 211, 153));
+					ShowAppMessage(string.Format("Успешно загружено {0} сертификатов из базы данных с привязками к компьютерам!", loadedRecords.Count), "Загрузка из БД", MessageBoxImage.Information);
+				}
+				else
+				{
+					AppendTerminalLog(string.Format("{0} - В таблице '{1}' базы данных MSSQL не найдено записей", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), table), Color.FromRgb(251, 191, 36));
+					ShowAppMessage(string.Format("В таблице '{0}' базы данных не найдено сертификатов.", table), "Загрузка из БД", MessageBoxImage.Information);
+				}
+			}
+			catch (Exception ex)
+			{
+				AppendTerminalLog(string.Format("{0} - Ошибка при загрузке из БД: {1}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), ex.Message), Color.FromRgb(248, 113, 113));
+				ShowAppMessage(string.Format("Ошибка при загрузке из базы данных: {0}", ex.Message), "Ошибка БД", MessageBoxImage.Error);
+			}
+			finally
+			{
+				_buttonLoadFromDb.IsEnabled = true;
+			}
 		}
 
 		// Переключение фильтра сертификатов со встроенной лицензией
@@ -2237,7 +2609,7 @@ namespace CertHarvester
 			ShowAppMessage("Параметры базы данных успешно сохранены в config.json!", "Сохранение", MessageBoxImage.Information);
 		}
 
-		// Полная очистка таблицы в базе данных MSSQL и сброс текущего списка сертификатов
+		// Полная очистка обеих связанных таблиц в базе данных MSSQL и сброс текущего списка сертификатов
 		private void ButtonClearDbTable_Click(object sender, RoutedEventArgs e)
 		{
 			string server = _textSqlServer.Text.Trim();
@@ -2246,8 +2618,8 @@ namespace CertHarvester
 			string connString = string.Format("Server={0};Database={1};Integrated Security=True;", server, database);
 
 			bool confirm = ShowAppConfirm(
-				string.Format("Вы действительно хотите полностью очистить таблицу '{0}' в базе данных MSSQL?\n\nВсе существующие записи будут удалены для проведения чистого сканирования.", table),
-				"Подтверждение очистки таблицы БД",
+				string.Format("Вы действительно хотите полностью очистить таблицы '{0}' и 'CertificateLocations' в базе данных MSSQL?\n\nВсе существующие записи будут удалены для проведения чистого сканирования.", table),
+				"Подтверждение очистки таблиц БД",
 				"Да",
 				"Нет",
 				MessageBoxImage.Warning);
@@ -2257,7 +2629,7 @@ namespace CertHarvester
 				return;
 			}
 
-			bool isSuccess = DatabaseManager.ClearTable(connString, table);
+			bool isSuccess = DatabaseManager.ClearTables(connString, table);
 			if (isSuccess == true)
 			{
 				_allCertificates.Clear();
@@ -2270,14 +2642,15 @@ namespace CertHarvester
 				_labelMetricInsertedNumber.Text = "0";
 				_labelMetricUpdatedNumber.Text = "0";
 				RefreshCertificatesGrid();
+				RenderComputersList();
 
-				AppendTerminalLog(string.Format("{0} - Таблица '{1}' в базе данных MSSQL успешно полностью очищена. Готово к чистому сканированию", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), table), Color.FromRgb(52, 211, 153));
-				ShowAppMessage(string.Format("Таблица '{0}' успешно очищена!", table), "Очистка БД", MessageBoxImage.Information);
+				AppendTerminalLog(string.Format("{0} - Таблицы '{1}' и 'CertificateLocations' в базе данных MSSQL успешно полностью очищены. Готово к чистому сканированию", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), table), Color.FromRgb(52, 211, 153));
+				ShowAppMessage(string.Format("Таблицы '{0}' и 'CertificateLocations' успешно очищены!", table), "Очистка БД", MessageBoxImage.Information);
 			}
 			else
 			{
-				AppendTerminalLog(string.Format("{0} - Ошибка при очистке таблицы '{1}' в БД MSSQL", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), table), Color.FromRgb(248, 113, 113));
-				ShowAppMessage("Не удалось очистить таблицу в базе данных. Проверьте подключение к серверу MSSQL.", "Ошибка очистки", MessageBoxImage.Error);
+				AppendTerminalLog(string.Format("{0} - Ошибка при очистке таблиц '{1}' и 'CertificateLocations' в БД MSSQL", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), table), Color.FromRgb(248, 113, 113));
+				ShowAppMessage("Не удалось очистить таблицы в базе данных. Проверьте подключение к серверу MSSQL.", "Ошибка очистки", MessageBoxImage.Error);
 			}
 		}
 
@@ -2338,13 +2711,27 @@ namespace CertHarvester
 
 					for (int ex = 0; ex < _allCertificates.Count; ex++)
 					{
-						if (_allCertificates[ex].SerialNumber == foundCert.SerialNumber)
+						if (string.Equals(_allCertificates[ex].SerialNumber, foundCert.SerialNumber, StringComparison.OrdinalIgnoreCase))
 						{
-							_allCertificates[ex].DateUpdated = DateTime.Now;
+							_allCertificates[ex].UpdatedAt = DateTime.Now;
 							_allCertificates[ex].OwnerName = foundCert.OwnerName;
-							_allCertificates[ex].Issuer = foundCert.Issuer;
+							_allCertificates[ex].IssuerName = foundCert.IssuerName;
 							_allCertificates[ex].CryptoProVersion = foundCert.CryptoProVersion;
 							_allCertificates[ex].HasEmbeddedLicense = foundCert.HasEmbeddedLicense;
+
+							if (foundCert.Locations != null && foundCert.Locations.Count > 0)
+							{
+								for (int l = 0; l < foundCert.Locations.Count; l++)
+								{
+									CertificateLocationRecord loc = foundCert.Locations[l];
+									_allCertificates[ex].AddLocation(loc.MachineName, loc.MachineIp, loc.SourcePath, loc.LastSeenAt);
+								}
+							}
+							else
+							{
+								_allCertificates[ex].AddLocation(foundCert.MachineName, foundCert.MachineIp, foundCert.SourcePath);
+							}
+
 							alreadyExists = true;
 							updatedExisting = updatedExisting + 1;
 							break;
@@ -2353,6 +2740,10 @@ namespace CertHarvester
 
 					if (!alreadyExists)
 					{
+						if (foundCert.Locations == null || foundCert.Locations.Count == 0)
+						{
+							foundCert.AddLocation(foundCert.MachineName, foundCert.MachineIp, foundCert.SourcePath);
+						}
 						_allCertificates.Add(foundCert);
 						newlyAdded = newlyAdded + 1;
 					}
@@ -2365,6 +2756,7 @@ namespace CertHarvester
 				_labelMetricUpdatedNumber.Text = updatedExisting.ToString();
 
 				RefreshCertificatesGrid();
+				RenderComputersList();
 				AppendTerminalLog(string.Format("{0} - Сканирование завершено. Всего сертификатов: {1}. Данные сохранены в config.json", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), _allCertificates.Count), Color.FromRgb(52, 211, 153));
 			}
 			catch (OperationCanceledException)

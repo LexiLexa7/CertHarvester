@@ -1899,20 +1899,24 @@ namespace CertHarvester
 					finalCryptoProVersion = !string.IsNullOrEmpty(detectedVersion) ? detectedVersion : CryptoProReader.DefaultTargetVersion;
 				}
 
+				ResolveMachineNameAndIp(computerName, out string detectedMachineName, out string detectedMachineIp);
+
 				DateTime currentTimestamp = DateTime.Now;
 
 				CertificateRecord record = new CertificateRecord
 				{
 					SerialNumber = normalizedSerialNumber,
-					DateInserted = currentTimestamp,
-					DateUpdated = currentTimestamp,
+					CreatedAt = currentTimestamp,
+					UpdatedAt = currentTimestamp,
 					OwnerName = ownerName,
-					Issuer = issuerName,
+					IssuerName = issuerName,
 					CryptoProVersion = finalCryptoProVersion,
 					HasEmbeddedLicense = hasEmbeddedLicense,
-					FilePath = sourcePath,
-					ComputerName = string.IsNullOrEmpty(computerName) ? Environment.MachineName : computerName
+					SourcePath = sourcePath,
+					MachineName = detectedMachineName,
+					MachineIp = detectedMachineIp
 				};
+				record.AddLocation(detectedMachineName, detectedMachineIp, sourcePath, currentTimestamp);
 
 				return record;
 			}
@@ -1962,7 +1966,7 @@ namespace CertHarvester
 			return result;
 		}
 
-		// Добавление новой записи сертификата в коллекцию с контролем дубликатов по серийному номеру
+		// Добавление новой записи сертификата в коллекцию с контролем дубликатов по серийному номеру и объединением локаций
 		public static void AddOrUpdateRecord(List<CertificateRecord> records, CertificateRecord newRecord)
 		{
 			if (records == null || newRecord == null || string.IsNullOrEmpty(newRecord.SerialNumber))
@@ -1975,17 +1979,102 @@ namespace CertHarvester
 				if (string.Equals(records[i].SerialNumber, newRecord.SerialNumber, StringComparison.OrdinalIgnoreCase))
 				{
 					// Запись уже присутствует в списке: обновляем время и сведения о лицензии
-					records[i].DateUpdated = DateTime.Now;
+					records[i].UpdatedAt = DateTime.Now;
 					if (!records[i].HasEmbeddedLicense && newRecord.HasEmbeddedLicense)
 					{
 						records[i].HasEmbeddedLicense = true;
 						records[i].CryptoProVersion = newRecord.CryptoProVersion;
 					}
+					else if (records[i].CryptoProVersion == "—" && newRecord.CryptoProVersion != "—")
+					{
+						records[i].CryptoProVersion = newRecord.CryptoProVersion;
+					}
+
+					// Объединяем информацию о расположении на компьютерах сети
+					if (newRecord.Locations != null && newRecord.Locations.Count > 0)
+					{
+						for (int l = 0; l < newRecord.Locations.Count; l++)
+						{
+							CertificateLocationRecord loc = newRecord.Locations[l];
+							records[i].AddLocation(loc.MachineName, loc.MachineIp, loc.SourcePath, loc.LastSeenAt);
+						}
+					}
+					else
+					{
+						records[i].AddLocation(newRecord.MachineName, newRecord.MachineIp, newRecord.SourcePath);
+					}
+
 					return;
 				}
 			}
 
+			if (newRecord.Locations == null || newRecord.Locations.Count == 0)
+			{
+				newRecord.AddLocation(newRecord.MachineName, newRecord.MachineIp, newRecord.SourcePath);
+			}
+
 			records.Add(newRecord);
+		}
+
+		// Разрешение имени компьютера и IP-адреса из строкового идентификатора узла
+		public static void ResolveMachineNameAndIp(string rawComputerName, out string machineName, out string machineIp)
+		{
+			machineName = Environment.MachineName;
+			machineIp = "127.0.0.1";
+
+			if (string.IsNullOrWhiteSpace(rawComputerName))
+			{
+				return;
+			}
+
+			string trimmed = rawComputerName.Trim();
+			if (trimmed.Contains("(") && trimmed.Contains(")"))
+			{
+				int start = trimmed.IndexOf('(');
+				int end = trimmed.IndexOf(')');
+				if (end > start)
+				{
+					machineName = trimmed.Substring(0, start).Trim();
+					machineIp = trimmed.Substring(start + 1, end - start - 1).Trim();
+					return;
+				}
+			}
+
+			if (IsLocalComputer(trimmed))
+			{
+				machineName = Environment.MachineName;
+				machineIp = "127.0.0.1";
+				return;
+			}
+
+			if (System.Net.IPAddress.TryParse(trimmed, out _))
+			{
+				machineIp = trimmed;
+				machineName = trimmed;
+				return;
+			}
+
+			machineName = trimmed;
+			try
+			{
+				System.Net.IPAddress[] addrs = System.Net.Dns.GetHostAddresses(trimmed);
+				if (addrs != null && addrs.Length > 0)
+				{
+					for (int i = 0; i < addrs.Length; i++)
+					{
+						if (addrs[i].AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+						{
+							machineIp = addrs[i].ToString();
+							return;
+						}
+					}
+					machineIp = addrs[0].ToString();
+				}
+			}
+			catch
+			{
+				machineIp = "127.0.0.1";
+			}
 		}
 
 		// Извлечение чистого имени хоста или IP-адреса из строки вида 'PC-NAME (192.168.1.1)'
