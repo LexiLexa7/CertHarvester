@@ -332,7 +332,7 @@ namespace CertHarvester
 			ConnectionString = "Server=localhost;Database=CertHarvesterDB;Integrated Security=True;";
 			TableName = "Certificates";
 			AutoCreateTable = true;
-			IsDarkTheme = false;
+			IsDarkTheme = true;
 			Certificates = new List<CertificateRecord>();
 		}
 	}

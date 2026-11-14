@@ -122,11 +122,8 @@ namespace CertHarvester
 		private string _searchFilterQuery;
 		private CancellationTokenSource _scanCts;
 		private bool _isScanningActive;
-		private bool _isDarkTheme;
+		private bool _isDarkTheme = true;
 		private HandyControl.Themes.Theme _handyTheme;
-
-		// Элементы верхней панели (NonClientArea)
-		private System.Windows.Controls.Button _buttonThemeToggle;
 
 		// Элементы левого сайдбара
 		private Border _sidebarCard;
@@ -181,6 +178,7 @@ namespace CertHarvester
 		private TextBlock _labelProgressPercent;
 		private TextBlock _labelProgressCurrentNode;
 		private System.Windows.Controls.ProgressBar _progressBarCustom;
+		private bool _hasCompletedScan = false;
 
 		// Поиск и фильтрация
 		private Border _panelSearchContainer;
@@ -241,8 +239,12 @@ namespace CertHarvester
 			if (_handyTheme == null)
 			{
 				_handyTheme = new HandyControl.Themes.Theme();
-				_handyTheme.Skin = SkinType.Default;
+				_handyTheme.Skin = SkinType.Dark;
 				System.Windows.Application.Current.Resources.MergedDictionaries.Add(_handyTheme);
+			}
+			else
+			{
+				_handyTheme.Skin = SkinType.Dark;
 			}
 
 			try
@@ -266,23 +268,6 @@ namespace CertHarvester
 			this.ShowTitle = true;
 			this.FontFamily = new FontFamily("Segoe UI");
 			this.FontSize = 13;
-
-			// Кнопка переключения темы в заголовке окна (NonClientArea)
-			_buttonThemeToggle = new System.Windows.Controls.Button();
-			_buttonThemeToggle.Content = "🌙  Тёмная тема";
-			_buttonThemeToggle.Height = 30;
-			_buttonThemeToggle.Padding = new Thickness(12, 4, 12, 4);
-			_buttonThemeToggle.Margin = new Thickness(0, 0, 16, 0);
-			_buttonThemeToggle.Cursor = System.Windows.Input.Cursors.Hand;
-			_buttonThemeToggle.Click += ButtonThemeToggle_Click;
-
-			StackPanel headerStack = new StackPanel();
-			headerStack.Orientation = System.Windows.Controls.Orientation.Horizontal;
-			headerStack.HorizontalAlignment = System.Windows.HorizontalAlignment.Right;
-			headerStack.VerticalAlignment = VerticalAlignment.Center;
-			headerStack.Children.Add(_buttonThemeToggle);
-
-			this.NonClientAreaContent = headerStack;
 
 			// Главная сетка: левая колонка (280px) и правая рабочая область (*)
 			Grid rootGrid = new Grid();
@@ -574,8 +559,8 @@ namespace CertHarvester
 			progressGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
 
 			DockPanel progTop = new DockPanel();
-			_labelProgressSummary = new TextBlock() { Text = "0 из 0 ПК", FontWeight = FontWeights.Bold, FontSize = 14 };
-			_labelProgressPercent = new TextBlock() { Text = "0%", FontSize = 12, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
+			_labelProgressSummary = new TextBlock() { Text = "Готов к сканированию", FontWeight = FontWeights.Bold, FontSize = 14 };
+			_labelProgressPercent = new TextBlock() { Text = "", FontSize = 13, FontWeight = FontWeights.SemiBold, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
 			DockPanel.SetDock(_labelProgressSummary, System.Windows.Controls.Dock.Left);
 			DockPanel.SetDock(_labelProgressPercent, System.Windows.Controls.Dock.Right);
 			progTop.Children.Add(_labelProgressSummary);
@@ -592,7 +577,7 @@ namespace CertHarvester
 			Grid.SetRow(_progressBarCustom, 1);
 			progressGrid.Children.Add(_progressBarCustom);
 
-			_labelProgressCurrentNode = new TextBlock() { Text = "Готов к запуску", FontSize = 11 };
+			_labelProgressCurrentNode = new TextBlock() { Text = "В очереди на проверку: 0 ПК", FontSize = 12 };
 			Grid.SetRow(_labelProgressCurrentNode, 2);
 			progressGrid.Children.Add(_labelProgressCurrentNode);
 
@@ -624,7 +609,7 @@ namespace CertHarvester
 			Border card = new Border();
 			card.CornerRadius = new CornerRadius(10);
 			card.BorderThickness = new Thickness(1);
-			card.Padding = new Thickness(14, 8, 14, 8);
+			card.Padding = new Thickness(14, 10, 14, 10);
 			card.Height = 84;
 
 			StackPanel stack = new StackPanel();
@@ -632,6 +617,7 @@ namespace CertHarvester
 			numberBlock.Text = number;
 			numberBlock.FontSize = 24;
 			numberBlock.FontWeight = FontWeights.Bold;
+			numberBlock.Margin = new Thickness(0, 0, 0, 4);
 			if (numberColor != null)
 			{
 				numberBlock.Foreground = numberColor;
@@ -640,7 +626,9 @@ namespace CertHarvester
 
 			titleBlock = new TextBlock();
 			titleBlock.Text = title;
-			titleBlock.FontSize = 11;
+			titleBlock.FontSize = 13;
+			titleBlock.FontWeight = FontWeights.SemiBold;
+			titleBlock.TextTrimming = TextTrimming.CharacterEllipsis;
 			stack.Children.Add(titleBlock);
 
 			card.Child = stack;
@@ -890,40 +878,27 @@ namespace CertHarvester
 			return terminalBorder;
 		}
 
-		// Обработчик переключения темы оформления с тихим сохранением настроек
-		private void ButtonThemeToggle_Click(object sender, RoutedEventArgs e)
+		// Применение визуального стиля и палитры ко всем компонентам окна (всегда тёмная тема)
+		private void ApplyTheme(bool isDark = true)
 		{
-			_isDarkTheme = !_isDarkTheme;
-			_currentConfig.IsDarkTheme = _isDarkTheme;
-			ConfigManager.SaveConfig(_currentConfig, true);
-
-			ApplyTheme(_isDarkTheme);
-			RefreshCertificatesGrid();
-		}
-
-		// Применение визуального стиля и палитры ко всем компонентам окна
-		private void ApplyTheme(bool isDark)
-		{
+			isDark = true;
+			_isDarkTheme = true;
 			if (_handyTheme != null)
 			{
-				_handyTheme.Skin = isDark ? SkinType.Dark : SkinType.Default;
+				_handyTheme.Skin = SkinType.Dark;
 			}
 
-			SolidColorBrush windowBg = isDark ? new SolidColorBrush(Color.FromRgb(17, 24, 39)) : new SolidColorBrush(Color.FromRgb(244, 246, 249));
-			SolidColorBrush cardBg = isDark ? new SolidColorBrush(Color.FromRgb(31, 41, 55)) : Brushes.White;
-			SolidColorBrush cardBorder = isDark ? new SolidColorBrush(Color.FromRgb(55, 65, 81)) : new SolidColorBrush(Color.FromRgb(229, 231, 235));
-			SolidColorBrush textPrimary = isDark ? new SolidColorBrush(Color.FromRgb(243, 244, 246)) : new SolidColorBrush(Color.FromRgb(17, 24, 39));
-			SolidColorBrush textSecondary = isDark ? new SolidColorBrush(Color.FromRgb(156, 163, 175)) : new SolidColorBrush(Color.FromRgb(107, 114, 128));
-			SolidColorBrush inputBg = isDark ? new SolidColorBrush(Color.FromRgb(17, 24, 39)) : new SolidColorBrush(Color.FromRgb(249, 250, 251));
+			SolidColorBrush windowBg = new SolidColorBrush(Color.FromRgb(17, 24, 39));
+			SolidColorBrush cardBg = new SolidColorBrush(Color.FromRgb(31, 41, 55));
+			SolidColorBrush cardBorder = new SolidColorBrush(Color.FromRgb(55, 65, 81));
+			SolidColorBrush textPrimary = new SolidColorBrush(Color.FromRgb(243, 244, 246));
+			SolidColorBrush textSecondary = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+			SolidColorBrush inputBg = new SolidColorBrush(Color.FromRgb(17, 24, 39));
 
 			// Окно и шапка
 			this.Background = windowBg;
 			this.NonClientAreaBackground = windowBg;
 			this.NonClientAreaForeground = textPrimary;
-
-			_buttonThemeToggle.Content = isDark ? "☀️  Светлая тема" : "🌙  Тёмная тема";
-			_buttonThemeToggle.Background = isDark ? new SolidColorBrush(Color.FromRgb(55, 65, 81)) : new SolidColorBrush(Color.FromRgb(226, 232, 240));
-			_buttonThemeToggle.Foreground = textPrimary;
 
 			// Сайдбар
 			_sidebarCard.Background = cardBg;
@@ -967,7 +942,7 @@ namespace CertHarvester
 			_labelProgressPercent.Foreground = textSecondary;
 			_labelProgressCurrentNode.Foreground = textSecondary;
 			_progressBarCustom.Background = isDark ? new SolidColorBrush(Color.FromRgb(51, 65, 85)) : new SolidColorBrush(Color.FromRgb(226, 232, 240));
-			_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(14, 165, 233));
+			UpdateProgressCardSummary();
 
 			// Поиск и фильтрация
 			_panelSearchContainer.Background = cardBg;
@@ -1144,7 +1119,8 @@ namespace CertHarvester
 		private void LoadConfigurationFromJsonFile()
 		{
 			_currentConfig = ConfigManager.LoadConfig();
-			_isDarkTheme = _currentConfig.IsDarkTheme;
+			_isDarkTheme = true;
+			_currentConfig.IsDarkTheme = true;
 
 			_networkNodes.Clear();
 			for (int i = 0; i < _currentConfig.NetworkComputers.Count; i++)
@@ -1262,14 +1238,55 @@ namespace CertHarvester
 			}
 		}
 
-		// Обновление карточки прогресса сканирования компьютеров
+		/// <summary>
+		/// Обновление карточки статуса сканирования с поддержкой трех визуальных состояний:
+		/// 1. Ожидание первого сканирования (база/кэш пусты)
+		/// 2. Ранее собранные данные загружены (из config.json или БД)
+		/// 3. Сканирование завершено
+		/// </summary>
 		private void UpdateProgressCardSummary()
 		{
-			int totalNodes = _networkNodes.Count;
-			_labelProgressSummary.Text = string.Format("0 из {0} ПК", totalNodes);
-			_progressBarCustom.Value = 0;
-			_labelProgressPercent.Text = "0%";
-			_labelProgressCurrentNode.Text = totalNodes > 0 ? "Готов к запуску" : "Добавьте ПК";
+			if (_isScanningActive == true)
+			{
+				return;
+			}
+
+			int totalNodes = _networkNodes != null ? _networkNodes.Count : 0;
+			bool hasData = _allCertificates != null && _allCertificates.Count > 0;
+
+			if (_hasCompletedScan == true)
+			{
+				// Состояние 3 (по завершении сканирования): Завершено
+				_labelProgressSummary.Text = string.Format("Завершено: {0} из {0} ПК", totalNodes);
+				_labelProgressPercent.Text = "100%";
+				_progressBarCustom.Value = 100;
+				_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(16, 185, 129));
+				_labelProgressCurrentNode.Text = "Сбор данных успешно завершен";
+			}
+			else if (hasData == true)
+			{
+				// Состояние 2: Данные загружены из кэша config.json или БД
+				_labelProgressSummary.Text = totalNodes > 0
+					? string.Format("Проверено: {0} из {0} ПК", totalNodes)
+					: "Данные загружены";
+				_labelProgressPercent.Text = "100%";
+				_progressBarCustom.Value = 100;
+				_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(16, 185, 129));
+				_labelProgressCurrentNode.Text = "Готов к повторному сканированию";
+			}
+			else
+			{
+				// Состояние 1: Ожидание первого сканирования (база/кэш пусты)
+				_labelProgressSummary.Text = "Готов к сканированию";
+				_labelProgressPercent.Text = string.Empty;
+				_progressBarCustom.Value = 0;
+				_progressBarCustom.Foreground = _isDarkTheme
+					? new SolidColorBrush(Color.FromRgb(51, 65, 85))
+					: new SolidColorBrush(Color.FromRgb(203, 213, 225));
+				_labelProgressCurrentNode.Text = totalNodes > 0
+					? string.Format("В очереди на проверку: {0} ПК", totalNodes)
+					: "Добавьте ПК в сеть";
+			}
 		}
 
 		// Отрисовка списка карточек компьютеров сети и плашки 'Все компьютеры (Сводка)' в левом сайдбаре
@@ -1991,6 +2008,8 @@ namespace CertHarvester
 
 					RefreshCertificatesGrid();
 					RenderComputersList();
+					_hasCompletedScan = false;
+					UpdateProgressCardSummary();
 
 					AppendTerminalLog(string.Format("{0} - Загружено {1} сертификатов из БД MSSQL", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), loadedRecords.Count), Color.FromRgb(52, 211, 153));
 					ShowAppMessage(string.Format("Загружено сертификатов: {0}", loadedRecords.Count), "Загрузка из БД", MessageBoxImage.Information);
@@ -3617,6 +3636,8 @@ namespace CertHarvester
 				_labelMetricUpdatedNumber.Text = "0";
 				RefreshCertificatesGrid();
 				RenderComputersList();
+				_hasCompletedScan = false;
+				UpdateProgressCardSummary();
 
 				AppendTerminalLog(string.Format("{0} - Таблицы '{1}' и 'CertificateLocations' очищены", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), table), Color.FromRgb(52, 211, 153));
 				ShowAppMessage(string.Format("Таблицы '{0}' и 'CertificateLocations' очищены.", table), "Очистка БД", MessageBoxImage.Information);
@@ -3661,11 +3682,12 @@ namespace CertHarvester
 					node.Status = "Сканируется";
 					RenderComputersList();
 
-					_labelProgressSummary.Text = string.Format("{0} из {1} ПК", i + 1, totalNodes);
 					double prog = ((i + 1) * 100.0) / totalNodes;
+					_labelProgressSummary.Text = string.Format("Проверено: {0} из {1} ПК", i, totalNodes);
 					_progressBarCustom.Value = prog;
+					_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(14, 165, 233));
 					_labelProgressPercent.Text = ((int)prog) + "%";
-					_labelProgressCurrentNode.Text = "Сейчас: " + node.Name;
+					_labelProgressCurrentNode.Text = string.Format("Сканируется: {0}...", node.Name);
 
 					AppendTerminalLog(string.Format("{0} - Начато сканирование ПК: {1} ({2})", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, node.IpAddress), Color.FromRgb(156, 163, 175));
 
@@ -3675,6 +3697,11 @@ namespace CertHarvester
 					AppendTerminalLog(string.Format("{0} - ПК {1} успешно проверен. Сертификаты и СКЗИ обработаны", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name), Color.FromRgb(52, 211, 153));
 					RenderComputersList();
 				}
+
+				_labelProgressSummary.Text = string.Format("Проверено: {0} из {0} ПК", totalNodes);
+				_progressBarCustom.Value = 100;
+				_labelProgressPercent.Text = "100%";
+				_labelProgressCurrentNode.Text = "Сбор сертификатов и СКЗИ...";
 
 				List<CertificateRecord> scanned = await Task.Run(() => CertificateScanner.ScanAll(_currentConfig));
 
@@ -3732,12 +3759,23 @@ namespace CertHarvester
 				_labelMetricInsertedNumber.Text = newlyAdded.ToString();
 				_labelMetricUpdatedNumber.Text = updatedExisting.ToString();
 
+				_hasCompletedScan = true;
+				_labelProgressSummary.Text = string.Format("Завершено: {0} из {0} ПК", totalNodes);
+				_labelProgressPercent.Text = "100%";
+				_progressBarCustom.Value = 100;
+				_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(16, 185, 129));
+				_labelProgressCurrentNode.Text = "Сбор данных успешно завершен";
+
 				RefreshCertificatesGrid();
 				RenderComputersList();
 				AppendTerminalLog(string.Format("{0} - Сканирование завершено. Всего сертификатов: {1}. Данные сохранены в config.json", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), _allCertificates.Count), Color.FromRgb(52, 211, 153));
 			}
 			catch (OperationCanceledException)
 			{
+				_hasCompletedScan = false;
+				_labelProgressSummary.Text = "Сканирование прервано";
+				_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+				_labelProgressCurrentNode.Text = "Остановлено пользователем";
 				AppendTerminalLog(string.Format("{0} - Сканирование прервано пользователем", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff")), Color.FromRgb(239, 68, 68));
 			}
 			catch (Exception ex)

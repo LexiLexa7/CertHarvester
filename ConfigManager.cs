@@ -102,7 +102,7 @@ namespace CertHarvester
 			config.ConnectionString = "Server=localhost;Database=CertHarvesterDB;Integrated Security=True;";
 			config.TableName = "Certificates";
 			config.AutoCreateTable = true;
-			config.IsDarkTheme = false;
+			config.IsDarkTheme = true;
 			config.Certificates = new List<CertificateRecord>();
 			return config;
 		}
