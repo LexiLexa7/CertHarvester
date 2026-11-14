@@ -7,6 +7,7 @@ using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.ServiceProcess;
+using System.Text.RegularExpressions;
 using Microsoft.Win32;
 
 namespace CertHarvester
@@ -2184,6 +2185,139 @@ namespace CertHarvester
 			}
 
 			return false;
+		}
+
+		// Валидация и нормализация абсолютного локального или сетевого пути Windows
+		public static bool IsValidWindowsPath(string rawPath, out string normalizedPath, out string errorMessage)
+		{
+			normalizedPath = string.Empty;
+			errorMessage = string.Empty;
+
+			if (string.IsNullOrWhiteSpace(rawPath))
+			{
+				errorMessage = "Путь к директории не может быть пустым.";
+				return false;
+			}
+
+			string path = rawPath.Trim().Trim('"', '\'');
+			if (string.IsNullOrWhiteSpace(path))
+			{
+				errorMessage = "Путь к директории не может состоять только из кавычек или пробелов.";
+				return false;
+			}
+
+			if (path.StartsWith("http:", StringComparison.OrdinalIgnoreCase) ||
+				path.StartsWith("https:", StringComparison.OrdinalIgnoreCase) ||
+				path.StartsWith("ftp:", StringComparison.OrdinalIgnoreCase) ||
+				path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+			{
+				errorMessage = "Веб-ссылки (URL) не поддерживаются. Укажите локальный путь Windows (например: C:\\Папка) или сетевой UNC-путь (например: \\\\server\\share).";
+				return false;
+			}
+
+			path = path.Replace('/', '\\');
+
+			if (Regex.IsMatch(path, @"^[a-zA-Z]:$"))
+			{
+				path += "\\";
+			}
+
+			bool isExtended = path.StartsWith(@"\\?\") || path.StartsWith(@"\\.\");
+			string pathToCheck = path;
+			if (isExtended)
+			{
+				pathToCheck = path.Substring(4);
+				if (pathToCheck.StartsWith(@"UNC\", StringComparison.OrdinalIgnoreCase))
+				{
+					pathToCheck = @"\\" + pathToCheck.Substring(4);
+					isExtended = false;
+				}
+			}
+
+			if (pathToCheck.StartsWith(@"\\"))
+			{
+				string uncBody = pathToCheck.Substring(2);
+				uncBody = Regex.Replace(uncBody, @"\\+", @"\");
+				pathToCheck = @"\\" + uncBody;
+			}
+			else
+			{
+				pathToCheck = Regex.Replace(pathToCheck, @"\\+", @"\");
+			}
+
+			char[] invalidChars = Path.GetInvalidPathChars();
+			for (int i = 0; i < invalidChars.Length; i++)
+			{
+				if (pathToCheck.IndexOf(invalidChars[i]) >= 0)
+				{
+					errorMessage = string.Format("Путь содержит недопустимый символ '{0}'.", invalidChars[i]);
+					return false;
+				}
+			}
+
+			char[] forbiddenChars = new char[] { '<', '>', '"', '|', '?', '*' };
+			for (int i = 0; i < forbiddenChars.Length; i++)
+			{
+				if (pathToCheck.IndexOf(forbiddenChars[i]) >= 0)
+				{
+					errorMessage = string.Format("Путь содержит недопустимый символ '{0}'. В путях Windows запрещены символы: < > \" | ? *", forbiddenChars[i]);
+					return false;
+				}
+			}
+
+			bool isDrivePath = Regex.IsMatch(pathToCheck, @"^[a-zA-Z]:(\\[^<>:""/\\|?*]+)*\\?$");
+			bool isUncPath = Regex.IsMatch(pathToCheck, @"^\\\\[^\\/:*?""<>|\s]+\\[^\\/:*?""<>|]+(\\[^<>:""/\\|?*]+)*\\?$");
+
+			if (!isDrivePath && !isUncPath)
+			{
+				if (pathToCheck.Length >= 2 && pathToCheck[1] == ':')
+				{
+					errorMessage = "Двоеточие допустимо только после буквы диска (например: C:\\). Внутри пути двоеточие запрещено.";
+				}
+				else if (pathToCheck.StartsWith(@"\\"))
+				{
+					errorMessage = "Сетевой UNC-путь должен содержать имя узла и ресурс (например: \\\\Компьютер\\Ресурс или \\\\192.168.1.50\\C$\\Папка).";
+				}
+				else
+				{
+					errorMessage = "Путь должен быть абсолютным Windows-путем: начинаться с буквы диска (например: C:\\Папка) или сетевого ресурса (\\\\Компьютер\\Ресурс).";
+				}
+				return false;
+			}
+
+			string[] segments = pathToCheck.Split(new char[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
+			string[] reservedNames = new string[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
+
+			for (int s = 0; s < segments.Length; s++)
+			{
+				string segment = segments[s].Trim();
+				if (s == 0 && segment.Length == 2 && segment[1] == ':')
+				{
+					continue;
+				}
+				string baseName = segment;
+				int dotIdx = baseName.IndexOf('.');
+				if (dotIdx > 0)
+				{
+					baseName = baseName.Substring(0, dotIdx);
+				}
+				for (int r = 0; r < reservedNames.Length; r++)
+				{
+					if (string.Equals(baseName, reservedNames[r], StringComparison.OrdinalIgnoreCase))
+					{
+						errorMessage = string.Format("Имя '{0}' является системным зарезервированным именем Windows (DOS-устройство) и не может использоваться в пути.", segment);
+						return false;
+					}
+				}
+			}
+
+			if (pathToCheck.Length > 3 && pathToCheck.EndsWith(@"\"))
+			{
+				pathToCheck = pathToCheck.TrimEnd('\\');
+			}
+
+			normalizedPath = pathToCheck;
+			return true;
 		}
 
 		// Проверка, относится ли имя хранилища к исключаемым системным кэшам обновления
