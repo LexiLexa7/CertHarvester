@@ -380,7 +380,7 @@ namespace CertHarvester
 				{
 					Console.ForegroundColor = ConsoleColor.Yellow;
 					Console.WriteLine("[!] Неизвестный параметр командной строки: " + token);
-					Console.WriteLine("[!] Введите CertHarvester.exe -help для просмотра полного списка команд.");
+					Console.WriteLine("[!] Введите -help для просмотра полного списка команд.");
 					Console.ResetColor();
 					return 1;
 				}
@@ -514,7 +514,7 @@ namespace CertHarvester
 			Console.ForegroundColor = ConsoleColor.Red;
 			Console.WriteLine("[!] Ошибка аргументов: " + message);
 			Console.ForegroundColor = ConsoleColor.Yellow;
-			Console.WriteLine("[!] Введите CertHarvester.exe -help для справки по формату команд.");
+			Console.WriteLine("[!] Введите -help для справки по формату команд.");
 			Console.ResetColor();
 		}
 
@@ -532,7 +532,7 @@ namespace CertHarvester
 			Console.ForegroundColor = ConsoleColor.Yellow;
 			Console.WriteLine(" ИСПОЛЬЗОВАНИЕ:");
 			Console.ResetColor();
-			Console.WriteLine("   CertHarvester.exe [флаги / команды] [параметры]");
+			Console.WriteLine("   [команда / флаги] [параметры]");
 			Console.WriteLine();
 
 			Console.ForegroundColor = ConsoleColor.Yellow;
@@ -592,19 +592,19 @@ namespace CertHarvester
 			Console.ForegroundColor = ConsoleColor.Yellow;
 			Console.WriteLine(" ПРИМЕРЫ ИСПОЛЬЗОВАНИЯ:");
 			Console.ResetColor();
-			Console.WriteLine("   CertHarvester.exe -scan");
-			Console.WriteLine("   CertHarvester.exe -scan -no-db");
-			Console.WriteLine("   CertHarvester.exe -target 192.168.1.100");
-			Console.WriteLine("   CertHarvester.exe -dir \"C:\\Certificates\" -export-csv \"C:\\Export\\certs.csv\"");
-			Console.WriteLine("   CertHarvester.exe -discover");
-			Console.WriteLine("   CertHarvester.exe -discover 192.168.1.1 192.168.1.50");
-			Console.WriteLine("   CertHarvester.exe -ping 192.168.1.50");
-			Console.WriteLine("   CertHarvester.exe -netuse 192.168.1.50 Administrator SecretPass123");
-			Console.WriteLine("   CertHarvester.exe -db-test -server \"SRV-DB\\SQLEXPRESS\" -db \"CertDB\"");
-			Console.WriteLine("   CertHarvester.exe -db-load");
-			Console.WriteLine("   CertHarvester.exe -add-node PC-BUHG 192.168.1.25 Admin Secret123");
-			Console.WriteLine("   CertHarvester.exe -del-node PC-BUHG");
-			Console.WriteLine("   CertHarvester.exe -export-csv certs.csv");
+			Console.WriteLine("   -scan");
+			Console.WriteLine("   -scan -no-db");
+			Console.WriteLine("   -target 192.168.1.100");
+			Console.WriteLine("   -dir \"C:\\Certificates\" -export-csv \"C:\\Export\\certs.csv\"");
+			Console.WriteLine("   -discover");
+			Console.WriteLine("   -discover 192.168.1.1 192.168.1.50");
+			Console.WriteLine("   -ping 192.168.1.50");
+			Console.WriteLine("   -netuse 192.168.1.50 Administrator SecretPass123");
+			Console.WriteLine("   -db-test -server \"SRV-DB\\SQLEXPRESS\" -db \"CertDB\"");
+			Console.WriteLine("   -db-load");
+			Console.WriteLine("   -add-node PC-BUHG 192.168.1.25 Admin Secret123");
+			Console.WriteLine("   -del-node PC-BUHG");
+			Console.WriteLine("   -export-csv certs.csv");
 
 			Console.ForegroundColor = ConsoleColor.Cyan;
 			Console.WriteLine("========================================================================================================");
@@ -1298,6 +1298,10 @@ namespace CertHarvester
 				Console.Write(" Выберите пункт меню (1-3): ");
 
 				string userInput = Console.ReadLine();
+				if (userInput == null)
+				{
+					break;
+				}
 				Console.WriteLine();
 
 				if (userInput == "1")
@@ -1309,15 +1313,11 @@ namespace CertHarvester
 					Console.WriteLine("        Добро пожаловать в консольное управление CertHarvester!       ");
 					Console.WriteLine("======================================================================");
 					Console.ResetColor();
-					Console.WriteLine(" Программа поддерживает запуск с флагами командной строки.");
-					Console.WriteLine(" Для вызова полной справки со всеми командами используйте флаг: -help");
-					Console.ForegroundColor = ConsoleColor.Yellow;
-					Console.WriteLine("   Пример: CertHarvester.exe -help");
-					Console.ResetColor();
+					Console.WriteLine(" Для вызова полной справки по всем командам введите: -help");
 					Console.WriteLine(" Доступные команды: -scan, -target, -dir, -discover, -ping, -db-test и др.");
 					Console.WriteLine("----------------------------------------------------------------------");
 					Console.WriteLine(" Нажмите [Enter] для запуска полного сканирования");
-					Console.WriteLine(" или введите флаги (например: -help, -discover, -ping 127.0.0.1):");
+					Console.WriteLine(" или введите команду (например: -help, -discover, -ping 127.0.0.1):");
 					Console.Write(" Команда > ");
 
 					string consoleInput = Console.ReadLine();
@@ -1331,6 +1331,12 @@ namespace CertHarvester
 					else
 					{
 						string[] customArgs = SplitCommandLine(consoleInput);
+						if (customArgs.Length > 0 && (customArgs[0].Equals("certharvester", StringComparison.OrdinalIgnoreCase) || customArgs[0].Equals("certharvester.exe", StringComparison.OrdinalIgnoreCase)))
+						{
+							List<string> trimmedArgs = new List<string>(customArgs);
+							trimmedArgs.RemoveAt(0);
+							customArgs = trimmedArgs.ToArray();
+						}
 						ParseAndExecuteCommandLine(customArgs);
 					}
 				}
