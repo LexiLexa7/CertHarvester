@@ -15,6 +15,8 @@ namespace CertHarvester
 		{
 			try
 			{
+				EnsureDatabaseExists(connectionString);
+
 				using (SqlConnection connection = new SqlConnection(connectionString))
 				{
 					connection.Open();
@@ -25,6 +27,57 @@ namespace CertHarvester
 			{
 				Logger.LogError("Сбой проверки соединения с базой данных MSSQL: " + ex.Message, ex);
 				return false;
+			}
+		}
+
+		// Автоматическая проверка существования целевой базы данных на сервере MSSQL и ее создание при отсутствии
+		public static void EnsureDatabaseExists(string connectionString)
+		{
+			try
+			{
+				if (string.IsNullOrWhiteSpace(connectionString))
+				{
+					return;
+				}
+
+				SqlConnectionStringBuilder builder = new SqlConnectionStringBuilder(connectionString);
+				string targetDatabaseName = builder.InitialCatalog;
+
+				if (string.IsNullOrWhiteSpace(targetDatabaseName) || string.Equals(targetDatabaseName, "master", StringComparison.OrdinalIgnoreCase))
+				{
+					return;
+				}
+
+				// Формирование строки подключения к системной базе master для выполнения административных команд
+				builder.InitialCatalog = "master";
+				string masterConnectionString = builder.ConnectionString;
+
+				using (SqlConnection masterConnection = new SqlConnection(masterConnectionString))
+				{
+					masterConnection.Open();
+
+					string checkDbQuery = "SELECT COUNT(*) FROM sys.databases WHERE [name] = @DatabaseName";
+					using (SqlCommand checkCmd = new SqlCommand(checkDbQuery, masterConnection))
+					{
+						checkCmd.Parameters.Add(new SqlParameter("@DatabaseName", targetDatabaseName));
+						int count = Convert.ToInt32(checkCmd.ExecuteScalar());
+
+						if (count == 0)
+						{
+							Logger.LogInfo("База данных '" + targetDatabaseName + "' отсутствует на сервере MSSQL. Выполняется автоматическое создание");
+							string createDbQuery = "CREATE DATABASE [" + targetDatabaseName + "]";
+							using (SqlCommand createCmd = new SqlCommand(createDbQuery, masterConnection))
+							{
+								createCmd.ExecuteNonQuery();
+								Logger.LogInfo("База данных '" + targetDatabaseName + "' успешно создана на SQL Server 2019");
+							}
+						}
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Logger.LogWarning("Не удалось автоматически проверить/создать БД через master (возможно, нет прав CREATE DATABASE): " + ex.Message);
 			}
 		}
 
@@ -69,15 +122,18 @@ namespace CertHarvester
 
 			try
 			{
+				// 1. Проверка существования БД и создание при необходимости
+				EnsureDatabaseExists(connectionString);
+
 				using (SqlConnection connection = new SqlConnection(connectionString))
 				{
 					connection.Open();
 					Logger.LogInfo("Успешное подключение к СУБД MSSQL для синхронизации сертификатов");
 
-					// 1. Обязательная проверка существования таблицы и создание при необходимости
+					// 2. Обязательная проверка существования таблицы и создание при необходимости
 					EnsureTableExists(connection, tableName);
 
-					// 2. Построчная обработка каждого сертификата с защитой от дублирования
+					// 3. Построчная обработка каждого сертификата с защитой от дублирования
 					for (int i = 0; i < certificates.Count; i++)
 					{
 						CertificateRecord cert = certificates[i];

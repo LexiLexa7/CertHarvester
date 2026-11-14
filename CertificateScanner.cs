@@ -9,12 +9,15 @@ using Microsoft.Win32;
 namespace CertHarvester
 {
 	/// <summary>
-	/// Класс сканирования файловой системы, системных хранилищ Windows (certmgr / certlm) и сетевых узлов для сбора сертификатов
+	/// Класс сканирования файловой системы, системных хранилищ Windows, удаленного подключения к ПК сети и скачивания сертификатов
 	/// </summary>
 	public static class CertificateScanner
 	{
 		// Массив поддерживаемых расширений открытой части сертификатов
 		private static readonly string[] CertificateExtensions = new string[] { ".cer", ".crt" };
+
+		// Корневой каталог на компьютере администратора для локального сохранения скачанных из сети сертификатов
+		public static readonly string HarvestedCertificatesDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "HarvestedCertificates");
 
 		// Главный метод выполнения комплексного сканирования системных хранилищ Windows, локальных каталогов и сетевых узлов
 		public static List<CertificateRecord> ScanAll(AppConfig config)
@@ -26,6 +29,9 @@ namespace CertHarvester
 				Logger.LogError("Конфигурация не инициализирована для запуска сканирования");
 				return collectedRecords;
 			}
+
+			// Создание локального каталога для скачивания сертификатов при его отсутствии
+			EnsureHarvestDirectoryExists();
 
 			Logger.LogInfo("Начало этапа сканирования сертификатов");
 
@@ -49,7 +55,7 @@ namespace CertHarvester
 				}
 			}
 
-			// 3. Обход ПК из списка сетевых узлов в локальной сети
+			// 3. Обход ПК из списка сетевых узлов в локальной сети: подключение, скачивание и парсинг
 			if (config.NetworkComputers != null)
 			{
 				for (int i = 0; i < config.NetworkComputers.Count; i++)
@@ -60,13 +66,30 @@ namespace CertHarvester
 						continue;
 					}
 
-					Logger.LogInfo("Запуск сетевого сканирования компьютера: " + computerName);
+					Logger.LogInfo("Запуск процедуры сбора сертификатов с сетевого ПК: " + computerName);
 					ScanNetworkComputer(computerName, config.ScanDirectories, collectedRecords);
 				}
 			}
 
 			Logger.LogInfo("Сканирование завершено. Всего обнаружено сертификатов: " + collectedRecords.Count);
 			return collectedRecords;
+		}
+
+		// Проверка существования и создание базового каталога для сохранения скачанных сертификатов
+		private static void EnsureHarvestDirectoryExists()
+		{
+			try
+			{
+				if (!Directory.Exists(HarvestedCertificatesDirectory))
+				{
+					Directory.CreateDirectory(HarvestedCertificatesDirectory);
+					Logger.LogInfo("Создан локальный каталог для сбора и архивации сертификатов: " + HarvestedCertificatesDirectory);
+				}
+			}
+			catch (Exception ex)
+			{
+				Logger.LogWarning("Не удалось создать каталог HarvestedCertificates: " + ex.Message);
+			}
 		}
 
 		// Сканирование системных хранилищ сертификатов Windows текущего пользователя и компьютера (certmgr.msc и certlm.msc)
@@ -121,6 +144,9 @@ namespace CertHarvester
 					{
 						AddOrUpdateRecord(records, parsedRecord);
 						Logger.LogInfo("Извлечен сертификат из хранилища (" + storeLocation + "\\" + storeName + "): " + parsedRecord.SerialNumber + " (" + parsedRecord.OwnerName + ")");
+
+						// Локальное резервное архивирование сертификата в каталог HarvestedCertificates
+						ArchiveCertificateLocally(certificate, computerName, "Store_" + storeLocation);
 					}
 				}
 			}
@@ -166,6 +192,9 @@ namespace CertHarvester
 							{
 								AddOrUpdateRecord(records, record);
 								Logger.LogInfo("Обнаружен сертификат в каталоге хранилища " + sourcePrefix + ": " + record.SerialNumber + " (" + record.OwnerName + ")");
+
+								// Сохранение копии сертификата в локальный архив
+								ArchiveCertificateLocally(certificate, computerName, "SystemFolder");
 							}
 						}
 					}
@@ -240,90 +269,105 @@ namespace CertHarvester
 			}
 		}
 
-		// Сканирование удаленного компьютера в локальной сети через реестр Windows и типовые сетевые UNC-пути
+		// Подключение к сетевому ПК, скачивание сертификатов на локальный компьютер и их последующий парсинг
 		public static void ScanNetworkComputer(string computerName, List<string> configuredPaths, List<CertificateRecord> records)
 		{
 			string cleanHost = ExtractCleanHostName(computerName);
-			bool isLocal = string.Equals(cleanHost, "localhost", StringComparison.OrdinalIgnoreCase) || string.Equals(cleanHost, ".", StringComparison.OrdinalIgnoreCase) || string.Equals(cleanHost, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
-
-			if (isLocal)
+			if (string.IsNullOrWhiteSpace(cleanHost))
 			{
-				Logger.LogInfo("Сетевой узел " + cleanHost + " указывает на локальный компьютер, пропуск сетевого UNC");
 				return;
 			}
 
-			// Проверка доступности узла по сети через Ping
+			// Создание локального каталога на компьютере администратора для хранения скачанных с данного ПК сертификатов
+			string computerLocalDirectory = Path.Combine(HarvestedCertificatesDirectory, SanitizeFolderName(cleanHost));
+			if (!Directory.Exists(computerLocalDirectory))
+			{
+				Directory.CreateDirectory(computerLocalDirectory);
+			}
+
+			bool isLocal = string.Equals(cleanHost, "localhost", StringComparison.OrdinalIgnoreCase) || string.Equals(cleanHost, ".", StringComparison.OrdinalIgnoreCase) || string.Equals(cleanHost, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+
+			if (isLocal == true)
+			{
+				Logger.LogInfo("Сетевой узел " + cleanHost + " является локальным компьютером. Выполняется сканирование локальных хранилищ");
+				return;
+			}
+
+			// Проверка доступности удаленного узла по ICMP Ping
 			bool isHostReachable = CheckHostAvailability(cleanHost);
-			if (!isHostReachable)
+			if (isHostReachable == false)
 			{
 				Logger.LogWarning("Сетевой узел " + cleanHost + " не отвечает на ICMP-запросы (Ping)");
 			}
 
-			// 1. Сканирование системного хранилища сертификатов удаленного ПК через Remote Registry
-			ScanRemoteRegistryCertificateStore(cleanHost, records);
+			Logger.LogInfo("Подключение к списку сертификатов удаленного компьютера: " + cleanHost);
 
-			// 2. Сканирование системных физических каталогов сертификатов удаленного ПК по UNC
-			ScanRemoteSystemCertificatesDirectories(cleanHost, records);
+			// Список путей локально сохраненных файлов сертификатов, скачанных с удаленного ПК
+			List<string> downloadedFilePaths = new List<string>();
 
-			// 3. Формирование типовых сетевых путей (административные и общие сетевые папки)
-			List<string> networkSharePaths = new List<string>();
-			networkSharePaths.Add(string.Format(@"\\{0}\c$\Certs", cleanHost));
-			networkSharePaths.Add(string.Format(@"\\{0}\Certs", cleanHost));
-			networkSharePaths.Add(string.Format(@"\\{0}\Certificates", cleanHost));
-			networkSharePaths.Add(string.Format(@"\\{0}\c$\Users\Public", cleanHost));
+			// 1. Подключение к удаленному реестру (Remote Registry) и скачивание сертификатов
+			DownloadCertificatesFromRemoteRegistry(cleanHost, computerLocalDirectory, downloadedFilePaths);
 
-			// Добавление пользовательских путей, адаптированных под сетевой компьютер
-			if (configuredPaths != null)
+			// 2. Подключение к системным каталогам удаленного ПК по сетевым UNC-путям и скачивание сертификатов
+			DownloadCertificatesFromRemoteUncSystemStores(cleanHost, computerLocalDirectory, downloadedFilePaths);
+
+			// 3. Подключение к пользовательским и общедоступным директориям удаленного ПК по UNC и скачивание .cer/.crt
+			DownloadCertificatesFromRemoteUncShares(cleanHost, configuredPaths, computerLocalDirectory, downloadedFilePaths);
+
+			Logger.LogInfo("Завершено скачивание с ПК " + cleanHost + ". Локально сохранено файлов: " + downloadedFilePaths.Count);
+
+			// 4. Последующий парсинг всех скачанных сертификатов из локальной папки
+			if (downloadedFilePaths.Count > 0)
 			{
-				for (int i = 0; i < configuredPaths.Count; i++)
+				for (int f = 0; f < downloadedFilePaths.Count; f++)
 				{
-					string rawPath = configuredPaths[i];
-					if (string.IsNullOrWhiteSpace(rawPath))
+					string localCertPath = downloadedFilePaths[f];
+					CertificateRecord record = ParseCertificateFile(localCertPath, cleanHost);
+					if (record != null)
 					{
-						continue;
-					}
-
-					// Преобразование пути диска (например C:\Folder) в сетевой UNC путь \\computer\c$\Folder
-					if (rawPath.Length >= 2 && rawPath[1] == ':')
-					{
-						char driveLetter = rawPath[0];
-						string relativePart = rawPath.Substring(2).TrimStart('\\', '/');
-						string uncPath = string.Format(@"\\{0}\{1}$\{2}", cleanHost, driveLetter, relativePart);
-						if (!networkSharePaths.Contains(uncPath))
-						{
-							networkSharePaths.Add(uncPath);
-						}
-					}
-					else if (rawPath.StartsWith(@"\\"))
-					{
-						if (!networkSharePaths.Contains(rawPath))
-						{
-							networkSharePaths.Add(rawPath);
-						}
+						AddOrUpdateRecord(records, record);
+						Logger.LogInfo("Успешно распарсен скачанный сертификат ПК " + cleanHost + ": " + record.SerialNumber + " (" + record.OwnerName + ")");
 					}
 				}
 			}
-
-			for (int shareIndex = 0; shareIndex < networkSharePaths.Count; shareIndex++)
+			else
 			{
-				string currentShare = networkSharePaths[shareIndex];
-				Logger.LogInfo("Проверка сетевого пути ПК " + cleanHost + ": " + currentShare);
-				ScanDirectoryRecursive(currentShare, cleanHost, records);
+				// Если в сети ПК недоступен, проверяем наличие ранее скачанных сертификатов в локальном кэше
+				string[] cachedFiles = Directory.GetFiles(computerLocalDirectory, "*.*");
+				int parsedFromCache = 0;
+
+				for (int c = 0; c < cachedFiles.Length; c++)
+				{
+					string cachedFile = cachedFiles[c];
+					CertificateRecord record = ParseCertificateFile(cachedFile, cleanHost);
+					if (record != null)
+					{
+						AddOrUpdateRecord(records, record);
+						parsedFromCache = parsedFromCache + 1;
+					}
+				}
+
+				if (parsedFromCache > 0)
+				{
+					Logger.LogInfo("Загружено из локального кэша ранее скачанных сертификатов ПК " + cleanHost + ": " + parsedFromCache);
+				}
 			}
 		}
 
-		// Сканирование хранилища сертификатов удаленного компьютера через удаленный реестр Windows (Remote Registry)
-		public static void ScanRemoteRegistryCertificateStore(string cleanHost, List<CertificateRecord> records)
+		// Подключение к удаленному реестру Windows (Remote Registry) и скачивание найденных сертификатов в локальные файлы .cer
+		public static void DownloadCertificatesFromRemoteRegistry(string cleanHost, string targetLocalDir, List<string> downloadedPaths)
 		{
 			try
 			{
-				Logger.LogInfo("Подключение к удаленному реестру ПК " + cleanHost + " для чтения хранилища сертификатов");
+				Logger.LogInfo("Подключение к удаленному реестру ПК " + cleanHost + " для выгрузки сертификатов");
 				using (RegistryKey baseKey = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, cleanHost))
 				{
 					string[] storeRegistryPaths = new string[]
 					{
 						@"SOFTWARE\Microsoft\SystemCertificates\MY\Certificates",
-						@"SOFTWARE\Microsoft\SystemCertificates\Personal\Certificates"
+						@"SOFTWARE\Microsoft\SystemCertificates\Personal\Certificates",
+						@"SOFTWARE\Microsoft\SystemCertificates\Root\Certificates",
+						@"SOFTWARE\Microsoft\SystemCertificates\CA\Certificates"
 					};
 
 					for (int p = 0; p < storeRegistryPaths.Length; p++)
@@ -352,18 +396,25 @@ namespace CertHarvester
 									{
 										try
 										{
-											X509Certificate2 certificate = new X509Certificate2(blobBytes);
-											string sourceDescription = string.Format(@"HKLM:\{0}\{1}", currentStorePath, thumbprint);
-											CertificateRecord record = CreateRecordFromCertificate(certificate, sourceDescription, cleanHost);
-											if (record != null)
+											X509Certificate2 cert = new X509Certificate2(blobBytes);
+											byte[] rawExport = cert.Export(X509ContentType.Cert);
+
+											string safeSerial = NormalizeSerialNumber(cert.SerialNumber);
+											string safeOwner = SanitizeFileName(ExtractCommonName(cert.Subject));
+											string fileName = string.Format("RemoteStore_{0}_{1}.cer", safeSerial, safeOwner);
+											string localFilePath = Path.Combine(targetLocalDir, fileName);
+
+											File.WriteAllBytes(localFilePath, rawExport);
+											if (!downloadedPaths.Contains(localFilePath))
 											{
-												AddOrUpdateRecord(records, record);
-												Logger.LogInfo("Извлечен сертификат из реестра ПК " + cleanHost + ": " + record.SerialNumber + " (" + record.OwnerName + ")");
+												downloadedPaths.Add(localFilePath);
 											}
+
+											Logger.LogInfo("Скачан сертификат из реестра ПК " + cleanHost + ": " + fileName + " (" + cert.Subject + ")");
 										}
 										catch (Exception parseEx)
 										{
-											Logger.LogWarning("Ошибка разбора сертификата " + thumbprint + " из реестра ПК " + cleanHost + ": " + parseEx.Message);
+											Logger.LogWarning("Ошибка разбора блоба сертификата " + thumbprint + " из реестра ПК " + cleanHost + ": " + parseEx.Message);
 										}
 									}
 								}
@@ -374,20 +425,20 @@ namespace CertHarvester
 			}
 			catch (Exception ex)
 			{
-				Logger.LogWarning("Не удалось прочитать сертификаты из удаленного реестра ПК " + cleanHost + ": " + ex.Message);
+				Logger.LogWarning("Не удалось выгрузить сертификаты через Remote Registry ПК " + cleanHost + ": " + ex.Message);
 			}
 		}
 
-		// Сканирование системных физических каталогов хранения сертификатов удаленного компьютера через UNC
-		public static void ScanRemoteSystemCertificatesDirectories(string cleanHost, List<CertificateRecord> records)
+		// Подключение к системным каталогам хранения сертификатов удаленного ПК по UNC и скачивание файлов
+		public static void DownloadCertificatesFromRemoteUncSystemStores(string cleanHost, string targetLocalDir, List<string> downloadedPaths)
 		{
 			try
 			{
-				// Сканирование хранилища LocalMachine удаленного ПК
+				// 1. Скачивание сертификатов из хранилища машины LocalMachine
 				string remoteMachineStore = string.Format(@"\\{0}\c$\ProgramData\Microsoft\Crypto\SystemCertificates\My\Certificates", cleanHost);
-				ScanSystemCertificatesDirectory(remoteMachineStore, "Удаленный LocalMachine\\My", cleanHost, records);
+				DownloadCertificateFilesFromDirectory(remoteMachineStore, "LocalMachine", cleanHost, targetLocalDir, downloadedPaths);
 
-				// Сканирование профилей пользователей в C$\Users
+				// 2. Скачивание сертификатов из профилей пользователей в C$\Users
 				string remoteUsersDir = string.Format(@"\\{0}\c$\Users", cleanHost);
 				if (Directory.Exists(remoteUsersDir))
 				{
@@ -395,17 +446,157 @@ namespace CertHarvester
 					for (int u = 0; u < userDirs.Length; u++)
 					{
 						string userProfile = userDirs[u];
+						string userName = Path.GetFileName(userProfile);
 						string userStore = Path.Combine(userProfile, @"AppData\Roaming\Microsoft\SystemCertificates\My\Certificates");
 						if (Directory.Exists(userStore))
 						{
-							ScanSystemCertificatesDirectory(userStore, "Удаленный CurrentUser\\My (" + Path.GetFileName(userProfile) + ")", cleanHost, records);
+							DownloadCertificateFilesFromDirectory(userStore, "User_" + userName, cleanHost, targetLocalDir, downloadedPaths);
 						}
 					}
 				}
 			}
 			catch (Exception ex)
 			{
-				Logger.LogWarning("Ошибка при сканировании системных каталогов сертификатов ПК " + cleanHost + ": " + ex.Message);
+				Logger.LogWarning("Ошибка при скачивании сертификатов из системных UNC-папок ПК " + cleanHost + ": " + ex.Message);
+			}
+		}
+
+		// Подключение к пользовательским сетевым папкам и UNC-ресурсам удаленного ПК и скачивание сертификатов
+		public static void DownloadCertificatesFromRemoteUncShares(string cleanHost, List<string> configuredPaths, string targetLocalDir, List<string> downloadedPaths)
+		{
+			try
+			{
+				List<string> candidateSharePaths = new List<string>();
+				candidateSharePaths.Add(string.Format(@"\\{0}\c$\Certificates", cleanHost));
+				candidateSharePaths.Add(string.Format(@"\\{0}\c$\Certs", cleanHost));
+				candidateSharePaths.Add(string.Format(@"\\{0}\Certificates", cleanHost));
+				candidateSharePaths.Add(string.Format(@"\\{0}\c$\CryptoPro\Certs", cleanHost));
+				candidateSharePaths.Add(string.Format(@"\\{0}\c$\Users\Public", cleanHost));
+
+				if (configuredPaths != null)
+				{
+					for (int i = 0; i < configuredPaths.Count; i++)
+					{
+						string rawPath = configuredPaths[i];
+						if (string.IsNullOrWhiteSpace(rawPath))
+						{
+							continue;
+						}
+
+						if (rawPath.Length >= 2 && rawPath[1] == ':')
+						{
+							char driveLetter = rawPath[0];
+							string relativePart = rawPath.Substring(2).TrimStart('\\', '/');
+							string uncPath = string.Format(@"\\{0}\{1}$\{2}", cleanHost, driveLetter, relativePart);
+							if (!candidateSharePaths.Contains(uncPath))
+							{
+								candidateSharePaths.Add(uncPath);
+							}
+						}
+						else if (rawPath.StartsWith(@"\\"))
+						{
+							if (!candidateSharePaths.Contains(rawPath))
+							{
+								candidateSharePaths.Add(rawPath);
+							}
+						}
+					}
+				}
+
+				for (int p = 0; p < candidateSharePaths.Count; p++)
+				{
+					string sharePath = candidateSharePaths[p];
+					DownloadCertificateFilesFromDirectory(sharePath, "Share", cleanHost, targetLocalDir, downloadedPaths);
+				}
+			}
+			catch (Exception ex)
+			{
+				Logger.LogWarning("Ошибка при обходе сетевых UNC-ресурсов ПК " + cleanHost + ": " + ex.Message);
+			}
+		}
+
+		// Вспомогательный метод копирования (скачивания) сертификатов из удаленной директории в локальную папку
+		private static void DownloadCertificateFilesFromDirectory(string remoteDirectory, string sourcePrefix, string cleanHost, string targetLocalDir, List<string> downloadedPaths)
+		{
+			try
+			{
+				if (!Directory.Exists(remoteDirectory))
+				{
+					return;
+				}
+
+				string[] files = Directory.GetFiles(remoteDirectory);
+				for (int i = 0; i < files.Length; i++)
+				{
+					string remoteFilePath = files[i];
+					try
+					{
+						byte[] fileBytes = File.ReadAllBytes(remoteFilePath);
+						if (fileBytes != null && fileBytes.Length > 0)
+						{
+							// Проверка валидности сертификата X.509
+							X509Certificate2 cert = new X509Certificate2(fileBytes);
+							string safeSerial = NormalizeSerialNumber(cert.SerialNumber);
+							string safeOwner = SanitizeFileName(ExtractCommonName(cert.Subject));
+
+							string localFileName = string.Format("{0}_{1}_{2}.cer", sourcePrefix, safeSerial, safeOwner);
+							string localDestinationPath = Path.Combine(targetLocalDir, localFileName);
+
+							File.WriteAllBytes(localDestinationPath, fileBytes);
+							if (!downloadedPaths.Contains(localDestinationPath))
+							{
+								downloadedPaths.Add(localDestinationPath);
+							}
+
+							Logger.LogInfo("Скачан сертификат с ПК " + cleanHost + " [" + sourcePrefix + "]: " + localFileName);
+						}
+					}
+					catch (CryptographicException)
+					{
+						// Файл не является сертификатом X.509, пропуск
+					}
+					catch (Exception copyEx)
+					{
+						Logger.LogWarning("Не удалось скопировать файл сертификата " + remoteFilePath + ": " + copyEx.Message);
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Logger.LogWarning("Каталог " + remoteDirectory + " недоступен для чтения: " + ex.Message);
+			}
+		}
+
+		// Локальное сохранение копии сертификата в каталог HarvestedCertificates для создания единого архива
+		public static void ArchiveCertificateLocally(X509Certificate2 certificate, string computerName, string sourceTag)
+		{
+			try
+			{
+				if (certificate == null)
+				{
+					return;
+				}
+
+				string targetFolder = Path.Combine(HarvestedCertificatesDirectory, SanitizeFolderName(computerName));
+				if (!Directory.Exists(targetFolder))
+				{
+					Directory.CreateDirectory(targetFolder);
+				}
+
+				string safeSerial = NormalizeSerialNumber(certificate.SerialNumber);
+				string safeOwner = SanitizeFileName(ExtractCommonName(certificate.Subject));
+				string fileName = string.Format("{0}_{1}_{2}.cer", sourceTag, safeSerial, safeOwner);
+				string fullPath = Path.Combine(targetFolder, fileName);
+
+				if (!File.Exists(fullPath))
+				{
+					byte[] rawBytes = certificate.Export(X509ContentType.Cert);
+					File.WriteAllBytes(fullPath, rawBytes);
+				}
+			}
+			catch
+			{
+				// Ошибки локального архивирования не прерывают основной процесс сканирования
 			}
 		}
 
@@ -639,6 +830,43 @@ namespace CertHarvester
 			{
 				return false;
 			}
+		}
+
+		// Очистка строки от недопустимых символов имени файла в ОС Windows
+		private static string SanitizeFileName(string input)
+		{
+			if (string.IsNullOrWhiteSpace(input))
+			{
+				return "Certificate";
+			}
+
+			char[] invalidChars = Path.GetInvalidFileNameChars();
+			string result = input;
+			for (int i = 0; i < invalidChars.Length; i++)
+			{
+				result = result.Replace(invalidChars[i], '_');
+			}
+
+			return result.Trim();
+		}
+
+		// Очистка строки от недопустимых символов имени каталога в ОС Windows
+		private static string SanitizeFolderName(string input)
+		{
+			if (string.IsNullOrWhiteSpace(input))
+			{
+				return "Computer";
+			}
+
+			char[] invalidChars = Path.GetInvalidPathChars();
+			string result = input;
+			for (int i = 0; i < invalidChars.Length; i++)
+			{
+				result = result.Replace(invalidChars[i], '_');
+			}
+
+			result = result.Replace(':', '_').Replace('/', '_').Replace('\\', '_');
+			return result.Trim();
 		}
 	}
 }

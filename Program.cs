@@ -72,7 +72,7 @@ namespace CertHarvester
 				Console.WriteLine(" Пользователь: " + Environment.UserName + " | Рабочая станция: " + Environment.MachineName);
 				Console.WriteLine("----------------------------------------------------------------------");
 				Console.WriteLine(" 1. Запустить консольное сканирование и парсинг сертификатов");
-				Console.WriteLine(" 2. Открыть графическую панель управления (Windows Forms)");
+				Console.WriteLine(" 2. Открыть графическую панель управления (HandyControl)");
 				Console.WriteLine(" 3. Выход из программы");
 				Console.WriteLine("----------------------------------------------------------------------");
 				Console.Write(" Выберите пункт меню (1-3): ");
@@ -142,30 +142,25 @@ namespace CertHarvester
 			}
 		}
 
-		private static bool _visualStylesConfigured = false;
-
-		// Инициализация и отображение графической панели управления на базе Windows Forms
+		// Инициализация и отображение графической панели управления на базе HandyControl (WPF)
 		public static void OpenGraphicalInterface()
 		{
 			try
 			{
-				Logger.LogInfo("Инициализация графической подсистемы Windows Forms");
+				Logger.LogInfo("Инициализация графической подсистемы HandyControl (WPF)");
 
-				if (_visualStylesConfigured == false)
+				if (System.Windows.Application.Current == null)
 				{
-					Application.EnableVisualStyles();
-					Application.SetCompatibleTextRenderingDefault(false);
-					_visualStylesConfigured = true;
+					System.Windows.Application app = new System.Windows.Application();
+					app.ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown;
 				}
 
-				using (ControlPanelForm form = new ControlPanelForm())
-				{
-					form.ShowDialog();
-				}
+				ControlPanelForm form = new ControlPanelForm();
+				form.ShowDialog();
 			}
 			catch (Exception ex)
 			{
-				Logger.LogError("Ошибка при запуске графического интерфейса Windows Forms: " + ex.Message, ex);
+				Logger.LogError("Ошибка при запуске графического интерфейса HandyControl: " + ex.Message, ex);
 			}
 		}
 	}

@@ -48,8 +48,8 @@ namespace CertHarvester
 			return CreateDefaultConfig();
 		}
 
-		// Сохранение переданного объекта конфигурации в JSON-файл
-		public static bool SaveConfig(AppConfig config, string filePath = null)
+		// Сохранение переданного объекта конфигурации в JSON-файл с возможностью тихого режима без логирования
+		public static bool SaveConfig(AppConfig config, string filePath = null, bool silent = false)
 		{
 			if (config == null)
 			{
@@ -72,7 +72,12 @@ namespace CertHarvester
 				}
 
 				File.WriteAllText(targetFilePath, jsonContent);
-				Logger.LogInfo("Конфигурация успешно сохранена в файл: " + targetFilePath);
+
+				if (silent == false)
+				{
+					Logger.LogInfo("Конфигурация успешно сохранена в файл: " + targetFilePath);
+				}
+
 				return true;
 			}
 			catch (Exception ex)
@@ -80,6 +85,12 @@ namespace CertHarvester
 				Logger.LogError("Ошибка при сохранении конфигурации в " + targetFilePath + ": " + ex.Message, ex);
 				return false;
 			}
+		}
+
+		// Перегрузка сохранения конфигурации с флагом тихого режима
+		public static bool SaveConfig(AppConfig config, bool silent)
+		{
+			return SaveConfig(config, null, silent);
 		}
 
 		// Формирование начального объекта конфигурации из файла или создание чистого конфига
