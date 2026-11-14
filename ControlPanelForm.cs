@@ -109,6 +109,342 @@ namespace CertHarvester
 	}
 
 	/// <summary>
+	/// Специализированный элемент управления вводом IPv4-адреса с 4 раздельными октетами (0-255) в едином поле
+	/// </summary>
+	public class IpAddressBox : Border
+	{
+		private readonly System.Windows.Controls.TextBox[] _octets = new System.Windows.Controls.TextBox[4];
+		private readonly TextBlock[] _dots = new TextBlock[3];
+		private Brush _normalBorderBrush;
+		private readonly Brush _focusBorderBrush = new SolidColorBrush(Color.FromRgb(2, 132, 199));
+		private readonly Brush _errorBorderBrush = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+		private bool _isError = false;
+
+		public IpAddressBox(bool isDark = true)
+		{
+			Height = 28;
+			CornerRadius = new CornerRadius(4);
+			BorderThickness = new Thickness(1);
+			_normalBorderBrush = isDark ? new SolidColorBrush(Color.FromRgb(51, 65, 85)) : new SolidColorBrush(Color.FromRgb(203, 213, 225));
+			BorderBrush = _normalBorderBrush;
+			Background = isDark ? new SolidColorBrush(Color.FromRgb(15, 23, 42)) : Brushes.White;
+			Margin = new Thickness(0, 0, 6, 0);
+
+			Grid grid = new Grid();
+			grid.VerticalAlignment = VerticalAlignment.Center;
+			grid.Margin = new Thickness(2, 0, 2, 0);
+
+			// 7 колонок: 4 октета и 3 разделительные точки
+			grid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
+			grid.ColumnDefinitions.Add(new ColumnDefinition() { Width = GridLength.Auto });
+			grid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
+			grid.ColumnDefinitions.Add(new ColumnDefinition() { Width = GridLength.Auto });
+			grid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
+			grid.ColumnDefinitions.Add(new ColumnDefinition() { Width = GridLength.Auto });
+			grid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
+
+			Brush textColor = isDark ? new SolidColorBrush(Color.FromRgb(241, 245, 249)) : new SolidColorBrush(Color.FromRgb(15, 23, 42));
+			Brush dotColor = isDark ? new SolidColorBrush(Color.FromRgb(148, 163, 184)) : new SolidColorBrush(Color.FromRgb(100, 116, 139));
+
+			for (int i = 0; i < 4; i++)
+			{
+				int octetIndex = i;
+				System.Windows.Controls.TextBox tb = new System.Windows.Controls.TextBox()
+				{
+					MaxLength = 3,
+					TextAlignment = TextAlignment.Center,
+					VerticalContentAlignment = VerticalAlignment.Center,
+					BorderThickness = new Thickness(0),
+					Background = Brushes.Transparent,
+					Foreground = textColor,
+					CaretBrush = textColor,
+					FontSize = 11,
+					FontWeight = FontWeights.Normal,
+					Padding = new Thickness(0)
+				};
+
+				tb.PreviewTextInput += (s, e) =>
+				{
+					for (int c = 0; c < e.Text.Length; c++)
+					{
+						if (!char.IsDigit(e.Text[c]))
+						{
+							e.Handled = true;
+							return;
+						}
+					}
+
+					string current = tb.Text;
+					int start = tb.SelectionStart;
+					int len = tb.SelectionLength;
+					string candidate = current.Remove(start, len).Insert(start, e.Text);
+
+					int val;
+					if (int.TryParse(candidate, out val))
+					{
+						if (val < 0 || val > 255)
+						{
+							e.Handled = true;
+							return;
+						}
+					}
+					else if (!string.IsNullOrEmpty(candidate))
+					{
+						e.Handled = true;
+						return;
+					}
+				};
+
+				tb.PreviewKeyDown += (s, e) =>
+				{
+					if (e.Key == Key.OemPeriod || e.Key == Key.Decimal || e.Key == Key.Space)
+					{
+						if (tb.Text.Length > 0 && octetIndex < 3)
+						{
+							_octets[octetIndex + 1].Focus();
+							_octets[octetIndex + 1].SelectAll();
+							e.Handled = true;
+						}
+					}
+					else if (e.Key == Key.Back)
+					{
+						if (tb.SelectionStart == 0 && tb.SelectionLength == 0 && octetIndex > 0)
+						{
+							_octets[octetIndex - 1].Focus();
+							_octets[octetIndex - 1].SelectionStart = _octets[octetIndex - 1].Text.Length;
+						}
+					}
+					else if (e.Key == Key.Right)
+					{
+						if (tb.SelectionStart == tb.Text.Length && octetIndex < 3)
+						{
+							_octets[octetIndex + 1].Focus();
+							_octets[octetIndex + 1].SelectionStart = 0;
+							e.Handled = true;
+						}
+					}
+					else if (e.Key == Key.Left)
+					{
+						if (tb.SelectionStart == 0 && octetIndex > 0)
+						{
+							_octets[octetIndex - 1].Focus();
+							_octets[octetIndex - 1].SelectionStart = _octets[octetIndex - 1].Text.Length;
+							e.Handled = true;
+						}
+					}
+				};
+
+				tb.TextChanged += (s, e) =>
+				{
+					ClearErrorHighlight();
+					if (tb.Text.Length == 3 && tb.SelectionStart == 3 && octetIndex < 3)
+					{
+						_octets[octetIndex + 1].Focus();
+						_octets[octetIndex + 1].SelectAll();
+					}
+				};
+
+				tb.GotFocus += (s, e) =>
+				{
+					if (!_isError)
+					{
+						BorderBrush = _focusBorderBrush;
+					}
+				};
+
+				tb.LostFocus += (s, e) =>
+				{
+					bool hasFocusAny = false;
+					for (int k = 0; k < 4; k++)
+					{
+						if (_octets[k].IsFocused)
+						{
+							hasFocusAny = true;
+							break;
+						}
+					}
+
+					if (!hasFocusAny && !_isError)
+					{
+						BorderBrush = _normalBorderBrush;
+					}
+				};
+
+				DataObject.AddPastingHandler(tb, (s, e) =>
+				{
+					if (e.DataObject.GetDataPresent(DataFormats.Text))
+					{
+						string text = e.DataObject.GetData(DataFormats.Text) as string;
+						if (!string.IsNullOrEmpty(text) && text.Contains("."))
+						{
+							string[] parts = text.Trim().Split('.');
+							if (parts.Length == 4)
+							{
+								bool valid = true;
+								int[] nums = new int[4];
+								for (int p = 0; p < 4; p++)
+								{
+									if (!int.TryParse(parts[p].Trim(), out nums[p]) || nums[p] < 0 || nums[p] > 255)
+									{
+										valid = false;
+										break;
+									}
+								}
+								if (valid)
+								{
+									for (int p = 0; p < 4; p++)
+									{
+										_octets[p].Text = nums[p].ToString();
+									}
+									_octets[3].Focus();
+									_octets[3].SelectionStart = _octets[3].Text.Length;
+									e.CancelCommand();
+									e.Handled = true;
+								}
+							}
+						}
+					}
+				});
+
+				Grid.SetColumn(tb, i * 2);
+				grid.Children.Add(tb);
+				_octets[i] = tb;
+
+				if (i < 3)
+				{
+					TextBlock dot = new TextBlock()
+					{
+						Text = ".",
+						Foreground = dotColor,
+						FontWeight = FontWeights.Bold,
+						FontSize = 12,
+						VerticalAlignment = VerticalAlignment.Center,
+						HorizontalAlignment = HorizontalAlignment.Center,
+						Margin = new Thickness(1, 0, 1, 0)
+					};
+					Grid.SetColumn(dot, i * 2 + 1);
+					grid.Children.Add(dot);
+					_dots[i] = dot;
+				}
+			}
+
+			Child = grid;
+		}
+
+		public void UpdateTheme(bool isDark)
+		{
+			_normalBorderBrush = isDark ? new SolidColorBrush(Color.FromRgb(51, 65, 85)) : new SolidColorBrush(Color.FromRgb(203, 213, 225));
+			if (!_isError)
+			{
+				BorderBrush = _normalBorderBrush;
+			}
+			Background = isDark ? new SolidColorBrush(Color.FromRgb(15, 23, 42)) : Brushes.White;
+			Brush textColor = isDark ? new SolidColorBrush(Color.FromRgb(241, 245, 249)) : new SolidColorBrush(Color.FromRgb(15, 23, 42));
+			Brush dotColor = isDark ? new SolidColorBrush(Color.FromRgb(148, 163, 184)) : new SolidColorBrush(Color.FromRgb(100, 116, 139));
+
+			for (int i = 0; i < 4; i++)
+			{
+				_octets[i].Foreground = textColor;
+				_octets[i].CaretBrush = textColor;
+			}
+			for (int i = 0; i < 3; i++)
+			{
+				_dots[i].Foreground = dotColor;
+			}
+		}
+
+		public void SetErrorHighlight()
+		{
+			_isError = true;
+			BorderBrush = _errorBorderBrush;
+		}
+
+		public void ClearErrorHighlight()
+		{
+			if (_isError)
+			{
+				_isError = false;
+				BorderBrush = _normalBorderBrush;
+			}
+		}
+
+		public bool IsEmpty()
+		{
+			return string.IsNullOrWhiteSpace(_octets[0].Text) &&
+			       string.IsNullOrWhiteSpace(_octets[1].Text) &&
+			       string.IsNullOrWhiteSpace(_octets[2].Text) &&
+			       string.IsNullOrWhiteSpace(_octets[3].Text);
+		}
+
+		public bool TryGetIpAddress(out string ipAddress, out string errorMessage)
+		{
+			ipAddress = string.Empty;
+			errorMessage = string.Empty;
+
+			bool anyFilled = !string.IsNullOrWhiteSpace(_octets[0].Text) ||
+			                 !string.IsNullOrWhiteSpace(_octets[1].Text) ||
+			                 !string.IsNullOrWhiteSpace(_octets[2].Text) ||
+			                 !string.IsNullOrWhiteSpace(_octets[3].Text);
+
+			if (!anyFilled)
+			{
+				return true;
+			}
+
+			for (int i = 0; i < 4; i++)
+			{
+				string text = _octets[i].Text.Trim();
+				int val;
+				if (string.IsNullOrEmpty(text) || !int.TryParse(text, out val) || val < 0 || val > 255)
+				{
+					SetErrorHighlight();
+					errorMessage = "IP-адрес некорректен. Каждый октет должен содержать число от 0 до 255.";
+					return false;
+				}
+			}
+
+			ipAddress = string.Format("{0}.{1}.{2}.{3}",
+				int.Parse(_octets[0].Text.Trim()),
+				int.Parse(_octets[1].Text.Trim()),
+				int.Parse(_octets[2].Text.Trim()),
+				int.Parse(_octets[3].Text.Trim()));
+
+			ClearErrorHighlight();
+			return true;
+		}
+
+		public void Clear()
+		{
+			for (int i = 0; i < 4; i++)
+			{
+				_octets[i].Text = string.Empty;
+			}
+			ClearErrorHighlight();
+		}
+
+		public void SetIp(string ip)
+		{
+			if (string.IsNullOrWhiteSpace(ip))
+			{
+				Clear();
+				return;
+			}
+
+			string[] parts = ip.Trim().Split('.');
+			if (parts.Length == 4)
+			{
+				for (int i = 0; i < 4; i++)
+				{
+					int n;
+					if (int.TryParse(parts[i].Trim(), out n) && n >= 0 && n <= 255)
+					{
+						_octets[i].Text = n.ToString();
+					}
+				}
+			}
+		}
+	}
+
 	/// <summary>
 	/// Графическая панель управления СКЗИ на базе современной библиотеки HandyControl (WPF для .NET Framework 4.5)
 	/// </summary>
@@ -410,7 +746,7 @@ namespace CertHarvester
 			_buttonExportDb.Cursor = System.Windows.Input.Cursors.Hand;
 			_buttonExportDb.FontWeight = FontWeights.SemiBold;
 			HandyControl.Controls.BorderElement.SetCornerRadius(_buttonExportDb, new CornerRadius(5));
-			LucideIcons.ApplyToButton(_buttonExportDb, "database", "Отправить в БД", 14, _buttonExportDb.Foreground, _buttonExportDb.Foreground, 8, FontWeights.SemiBold);
+			LucideIcons.ApplyToButton(_buttonExportDb, "database", "Отправить данные в БД", 14, _buttonExportDb.Foreground, _buttonExportDb.Foreground, 8, FontWeights.SemiBold);
 			_buttonExportDb.Click += ButtonExportDb_Click;
 			dbBlock.Children.Add(_buttonExportDb);
 
@@ -945,7 +1281,7 @@ namespace CertHarvester
 			{
 				_buttonExportDb.Background = isDark ? new SolidColorBrush(Color.FromRgb(30, 58, 138)) : new SolidColorBrush(Color.FromRgb(219, 234, 254));
 				_buttonExportDb.Foreground = isDark ? new SolidColorBrush(Color.FromRgb(147, 197, 253)) : new SolidColorBrush(Color.FromRgb(37, 99, 235));
-				LucideIcons.ApplyToButton(_buttonExportDb, "database", "Отправить в БД", 14, _buttonExportDb.Foreground, _buttonExportDb.Foreground, 8, FontWeights.SemiBold);
+				LucideIcons.ApplyToButton(_buttonExportDb, "database", "Отправить данные в БД", 14, _buttonExportDb.Foreground, _buttonExportDb.Foreground, 8, FontWeights.SemiBold);
 			}
 
 			// Карточки метрик
@@ -2148,7 +2484,7 @@ namespace CertHarvester
 			Brush textPrimary = _isDarkTheme ? Brushes.White : new SolidColorBrush(Color.FromRgb(15, 23, 42));
 			Brush textSecondary = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(148, 163, 184)) : new SolidColorBrush(Color.FromRgb(100, 116, 139));
 			Brush inputBg = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(15, 23, 42)) : Brushes.White;
-			Brush inputBorder = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(71, 85, 105)) : new SolidColorBrush(Color.FromRgb(203, 213, 225));
+			Brush inputBorder = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(51, 65, 85)) : new SolidColorBrush(Color.FromRgb(203, 213, 225));
 
 			window.Background = winBg;
 
@@ -2492,11 +2828,14 @@ namespace CertHarvester
 						Height = 26,
 						Background = inputBg,
 						Foreground = textPrimary,
+						CaretBrush = textPrimary,
 						BorderBrush = inputBorder,
+						BorderThickness = new Thickness(1),
 						VerticalContentAlignment = VerticalAlignment.Center,
-						Padding = new Thickness(4, 0, 4, 0),
+						Padding = new Thickness(6, 0, 6, 0),
 						FontSize = 11
 					};
+					HandyControl.Controls.BorderElement.SetCornerRadius(userBox, new CornerRadius(4));
 					userBox.TextChanged += (s, ev) => node.Username = userBox.Text.Trim();
 					userStack.Children.Add(userBox);
 					Grid.SetColumn(userStack, 1);
@@ -2511,11 +2850,14 @@ namespace CertHarvester
 						Height = 26,
 						Background = inputBg,
 						Foreground = textPrimary,
+						CaretBrush = textPrimary,
 						BorderBrush = inputBorder,
+						BorderThickness = new Thickness(1),
 						VerticalContentAlignment = VerticalAlignment.Center,
-						Padding = new Thickness(4, 0, 4, 0),
+						Padding = new Thickness(6, 0, 6, 0),
 						FontSize = 11
 					};
+					HandyControl.Controls.BorderElement.SetCornerRadius(passBox, new CornerRadius(4));
 					passBox.TextChanged += (s, ev) => node.Password = passBox.Text;
 					passStack.Children.Add(passBox);
 					Grid.SetColumn(passStack, 2);
@@ -3015,13 +3357,13 @@ namespace CertHarvester
 			inputFieldsGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
 			inputFieldsGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
 			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(170) });
-			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(150) });
-			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(150) });
-			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(150) });
+			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(165) });
+			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(145) });
+			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(145) });
 			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
 
 			TextBlock lblName = new TextBlock() { Text = "Имя компьютера:", FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = textSecondary, Margin = new Thickness(1, 0, 6, 3) };
-			TextBlock lblIp = new TextBlock() { Text = "IP-адрес / хост:", FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = textSecondary, Margin = new Thickness(1, 0, 6, 3) };
+			TextBlock lblIp = new TextBlock() { Text = "IP-адрес:", FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = textSecondary, Margin = new Thickness(1, 0, 6, 3) };
 			TextBlock lblUser = new TextBlock() { Text = "Логин:", FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = textSecondary, Margin = new Thickness(1, 0, 6, 3) };
 			TextBlock lblPass = new TextBlock() { Text = "Пароль:", FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = textSecondary, Margin = new Thickness(1, 0, 6, 3) };
 
@@ -3034,16 +3376,57 @@ namespace CertHarvester
 			inputFieldsGrid.Children.Add(lblUser);
 			inputFieldsGrid.Children.Add(lblPass);
 
-			System.Windows.Controls.TextBox newNameBox = new System.Windows.Controls.TextBox() { Text = string.Empty, Height = 28, Margin = new Thickness(0, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(6, 0, 6, 0), FontSize = 11 };
+			System.Windows.Controls.TextBox newNameBox = new System.Windows.Controls.TextBox()
+			{
+				Text = string.Empty,
+				Height = 28,
+				Margin = new Thickness(0, 0, 6, 0),
+				VerticalContentAlignment = VerticalAlignment.Center,
+				Padding = new Thickness(8, 0, 8, 0),
+				FontSize = 11,
+				Background = inputBg,
+				Foreground = textPrimary,
+				CaretBrush = textPrimary,
+				BorderBrush = inputBorder,
+				BorderThickness = new Thickness(1)
+			};
+			HandyControl.Controls.BorderElement.SetCornerRadius(newNameBox, new CornerRadius(4));
 			HandyControl.Controls.InfoElement.SetPlaceholder(newNameBox, "Напр. DESKTOP-01");
 
-			System.Windows.Controls.TextBox newIpBox = new System.Windows.Controls.TextBox() { Text = string.Empty, Height = 28, Margin = new Thickness(0, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(6, 0, 6, 0), FontSize = 11 };
-			HandyControl.Controls.InfoElement.SetPlaceholder(newIpBox, "192.168.1.X");
+			IpAddressBox newIpBox = new IpAddressBox(_isDarkTheme);
 
-			System.Windows.Controls.TextBox newUserBox = new System.Windows.Controls.TextBox() { Text = string.Empty, Height = 28, Margin = new Thickness(0, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(6, 0, 6, 0), FontSize = 11 };
+			System.Windows.Controls.TextBox newUserBox = new System.Windows.Controls.TextBox()
+			{
+				Text = string.Empty,
+				Height = 28,
+				Margin = new Thickness(0, 0, 6, 0),
+				VerticalContentAlignment = VerticalAlignment.Center,
+				Padding = new Thickness(8, 0, 8, 0),
+				FontSize = 11,
+				Background = inputBg,
+				Foreground = textPrimary,
+				CaretBrush = textPrimary,
+				BorderBrush = inputBorder,
+				BorderThickness = new Thickness(1)
+			};
+			HandyControl.Controls.BorderElement.SetCornerRadius(newUserBox, new CornerRadius(4));
 			HandyControl.Controls.InfoElement.SetPlaceholder(newUserBox, "Логин...");
 
-			System.Windows.Controls.TextBox newPassBox = new System.Windows.Controls.TextBox() { Text = string.Empty, Height = 28, Margin = new Thickness(0, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(6, 0, 6, 0), FontSize = 11 };
+			System.Windows.Controls.TextBox newPassBox = new System.Windows.Controls.TextBox()
+			{
+				Text = string.Empty,
+				Height = 28,
+				Margin = new Thickness(0, 0, 6, 0),
+				VerticalContentAlignment = VerticalAlignment.Center,
+				Padding = new Thickness(8, 0, 8, 0),
+				FontSize = 11,
+				Background = inputBg,
+				Foreground = textPrimary,
+				CaretBrush = textPrimary,
+				BorderBrush = inputBorder,
+				BorderThickness = new Thickness(1)
+			};
+			HandyControl.Controls.BorderElement.SetCornerRadius(newPassBox, new CornerRadius(4));
 			HandyControl.Controls.InfoElement.SetPlaceholder(newPassBox, "Пароль...");
 
 			Grid.SetRow(newNameBox, 1); Grid.SetColumn(newNameBox, 0);
@@ -3072,9 +3455,16 @@ namespace CertHarvester
 			btnAddNew.Click += (s, ev) =>
 			{
 				string name = newNameBox.Text.Trim();
-				string ip = newIpBox.Text.Trim();
 				string user = newUserBox.Text.Trim();
 				string pass = newPassBox.Text;
+
+				string ip;
+				string ipError;
+				if (!newIpBox.TryGetIpAddress(out ip, out ipError))
+				{
+					ShowAppMessage(ipError, "Некорректный IP-адрес", MessageBoxImage.Warning);
+					return;
+				}
 
 				if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(ip))
 				{
@@ -3098,7 +3488,7 @@ namespace CertHarvester
 				UpdateProgressCardSummary();
 				AppendTerminalLog(string.Format("{0} - Добавлен новый сетевой ПК: {1} ({2}), пользователь: {3}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), name, ip, user), Color.FromRgb(96, 165, 250));
 				newNameBox.Text = string.Empty;
-				newIpBox.Text = string.Empty;
+				newIpBox.Clear();
 				newUserBox.Text = string.Empty;
 				newPassBox.Text = string.Empty;
 			};
@@ -3961,19 +4351,50 @@ namespace CertHarvester
 		{
 			if (_allCertificates == null || _allCertificates.Count == 0)
 			{
-				ShowAppMessage("Список пуст. Сначала выполните сканирование.", "Информация", MessageBoxImage.Information);
+				ShowAppMessage("Список сертификатов пуст. Сначала выполните сканирование.", "Отправка данных в БД", MessageBoxImage.Information);
 				return;
 			}
 
-			AppendTerminalLog(string.Format("{0} - Запущена отправка данных в СУБД Microsoft SQL Server...", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff")), Colors.White);
+			string server = _textSqlServer != null ? _textSqlServer.Text.Trim() : string.Empty;
+			string database = _textSqlDatabase != null ? _textSqlDatabase.Text.Trim() : string.Empty;
+			string tableName = _textSqlTable != null && !string.IsNullOrWhiteSpace(_textSqlTable.Text) ? _textSqlTable.Text.Trim() : "Certificates";
 
-			string connectionString = string.Format("Server={0};Database={1};Integrated Security=True;", _textSqlServer.Text.Trim(), _textSqlDatabase.Text.Trim());
-			string tableName = _textSqlTable.Text.Trim();
+			if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(database))
+			{
+				ShowAppMessage("Укажите адрес сервера и имя базы данных в настройках подключения.", "Параметры БД", MessageBoxImage.Warning);
+				return;
+			}
 
-			int savedCount = await Task.Run(() => DatabaseManager.SaveCertificates(_allCertificates, connectionString, tableName));
+			string connectionString = string.Format("Server={0};Database={1};Integrated Security=True;", server, database);
 
-			_labelMetricInsertedNumber.Text = savedCount.ToString();
-			AppendTerminalLog(string.Format("{0} - Синхронизация с БД завершена. Таблица '{1}': успешно обработано записей: {2}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), tableName, savedCount), Color.FromRgb(52, 211, 153));
+			AppendTerminalLog(string.Format("{0} - Запущена отправка данных в СУБД Microsoft SQL Server ({1}.dbo.{2})...", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), database, tableName), Colors.White);
+
+			_buttonExportDb.IsEnabled = false;
+
+			try
+			{
+				int savedCount = await Task.Run(() => DatabaseManager.SaveCertificates(_allCertificates, connectionString, tableName));
+
+				_labelMetricInsertedNumber.Text = savedCount.ToString();
+				AppendTerminalLog(string.Format("{0} - Синхронизация с БД завершена. Таблица '{1}': успешно обработано записей: {2}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), tableName, savedCount), Color.FromRgb(52, 211, 153));
+
+				ShowAppMessage(
+					string.Format("Данные успешно отправлены в базу данных!\n\nТаблица: {0}\nОбработано записей: {1}", tableName, savedCount),
+					"Отправка данных в БД",
+					MessageBoxImage.Information);
+			}
+			catch (Exception ex)
+			{
+				AppendTerminalLog(string.Format("{0} - Сбой при отправке данных в БД: {1}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), ex.Message), Color.FromRgb(248, 113, 113));
+				ShowAppMessage(
+					string.Format("Не удалось отправить данные в базу данных:\n\n{0}", ex.Message),
+					"Ошибка БД",
+					MessageBoxImage.Error);
+			}
+			finally
+			{
+				_buttonExportDb.IsEnabled = true;
+			}
 		}
 
 

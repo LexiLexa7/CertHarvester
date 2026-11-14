@@ -539,7 +539,7 @@ namespace CertHarvester
 			Console.WriteLine(" ОСНОВНЫЕ РЕЖИМЫ:");
 			Console.ResetColor();
 			Console.WriteLine("   -help, --help, -h, /?              Отобразить данную справку со списком всех команд и флагов");
-			Console.WriteLine("   -ui, --ui, -gui                    Запустить графический интерфейс пользователя (WPF)");
+			Console.WriteLine("   -ui, --ui, -gui                    Запустить графический интерфейс пользователя");
 			Console.WriteLine("   (без параметров)                   Запустить интерактивное консольное меню с выбором действий");
 			Console.WriteLine();
 
@@ -1292,7 +1292,7 @@ namespace CertHarvester
 				Console.WriteLine(" Пользователь: " + Environment.UserName + " | Рабочая станция: " + Environment.MachineName);
 				Console.WriteLine("----------------------------------------------------------------------");
 				Console.WriteLine(" 1. Консольное управление");
-				Console.WriteLine(" 2. Открыть графическую панель управления (WPF)");
+				Console.WriteLine(" 2. Открыть графическую панель управления");
 				Console.WriteLine(" 3. Выход из программы");
 				Console.WriteLine("----------------------------------------------------------------------");
 				Console.Write(" Выберите пункт меню (1-3): ");

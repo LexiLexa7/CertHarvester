@@ -257,10 +257,12 @@ namespace CertHarvester
 			catch (SqlException sqlEx)
 			{
 				Logger.LogError("Сбой SQL Server при сохранении сертификатов: " + sqlEx.Message, sqlEx);
+				throw;
 			}
 			catch (Exception ex)
 			{
 				Logger.LogError("Непредвиденная ошибка в модуле DatabaseManager: " + ex.Message, ex);
+				throw;
 			}
 
 			return processedCount;
@@ -522,6 +524,7 @@ namespace CertHarvester
 			catch (Exception ex)
 			{
 				Logger.LogError("Сбой при чтении сертификатов из БД через LEFT JOIN: " + ex.Message, ex);
+				throw;
 			}
 
 			return result;
