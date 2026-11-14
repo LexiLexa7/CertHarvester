@@ -72,7 +72,7 @@ namespace CertHarvester
 				Console.WriteLine(" Пользователь: " + Environment.UserName + " | Рабочая станция: " + Environment.MachineName);
 				Console.WriteLine("----------------------------------------------------------------------");
 				Console.WriteLine(" 1. Запустить консольное сканирование и парсинг сертификатов");
-				Console.WriteLine(" 2. Открыть графическую панель управления (HandyControl)");
+				Console.WriteLine(" 2. Открыть графическую панель управления");
 				Console.WriteLine(" 3. Выход из программы");
 				Console.WriteLine("----------------------------------------------------------------------");
 				Console.Write(" Выберите пункт меню (1-3): ");
@@ -147,7 +147,7 @@ namespace CertHarvester
 		{
 			try
 			{
-				Logger.LogInfo("Инициализация графической подсистемы HandyControl (WPF)");
+				Logger.LogInfo("Инициализация графической подсистемы интерфейса (WPF)");
 
 				if (System.Windows.Application.Current == null)
 				{
@@ -160,7 +160,7 @@ namespace CertHarvester
 			}
 			catch (Exception ex)
 			{
-				Logger.LogError("Ошибка при запуске графического интерфейса HandyControl: " + ex.Message, ex);
+				Logger.LogError("Ошибка при запуске графического интерфейса: " + ex.Message, ex);
 			}
 		}
 	}

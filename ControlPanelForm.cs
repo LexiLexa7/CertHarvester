@@ -67,6 +67,7 @@ namespace CertHarvester
 	}
 
 	/// <summary>
+	/// <summary>
 	/// Графическая панель управления СКЗИ на базе современной библиотеки HandyControl (WPF для .NET Framework 4.5)
 	/// </summary>
 	public class ControlPanelForm : HcWindow
@@ -125,7 +126,13 @@ namespace CertHarvester
 		// Поиск и фильтрация
 		private Border _panelSearchContainer;
 		private System.Windows.Controls.TextBox _textSearchBox;
+		private TextBlock _labelSearchPlaceholder;
+		private System.Windows.Controls.Button _buttonClearSearch;
 		private System.Windows.Controls.Button _buttonFilterLicense;
+
+		// Сортировка таблицы сертификатов
+		private string _sortColumnKey;
+		private bool _isSortAscending;
 
 		// Таблица DataGrid
 		private System.Windows.Controls.DataGrid _gridCertificates;
@@ -144,6 +151,8 @@ namespace CertHarvester
 			_filterOnlyWithLicense = false;
 			_searchFilterQuery = string.Empty;
 			_isScanningActive = false;
+			_sortColumnKey = null;
+			_isSortAscending = true;
 
 			InitializeHandyControlTheme();
 			InitializeComponentCustom();
@@ -152,7 +161,7 @@ namespace CertHarvester
 			RefreshCertificatesGrid();
 		}
 
-		// Инициализация ресурсного словаря HandyControl для динамического переключения тем
+		// Инициализация ресурсного словаря HandyControl для динамического переключения тем оформления
 		private void InitializeHandyControlTheme()
 		{
 			if (System.Windows.Application.Current == null)
@@ -591,17 +600,52 @@ namespace CertHarvester
 			DockPanel.SetDock(icon, System.Windows.Controls.Dock.Left);
 			searchInner.Children.Add(icon);
 
+			_buttonClearSearch = new System.Windows.Controls.Button();
+			_buttonClearSearch.Content = "✕";
+			_buttonClearSearch.FontSize = 11;
+			_buttonClearSearch.Width = 26;
+			_buttonClearSearch.Height = 26;
+			_buttonClearSearch.Margin = new Thickness(0, 0, 6, 0);
+			_buttonClearSearch.Cursor = System.Windows.Input.Cursors.Hand;
+			_buttonClearSearch.Background = Brushes.Transparent;
+			_buttonClearSearch.BorderThickness = new Thickness(0);
+			_buttonClearSearch.Visibility = Visibility.Collapsed;
+			_buttonClearSearch.Click += (s, e) =>
+			{
+				_textSearchBox.Text = string.Empty;
+				_textSearchBox.Focus();
+			};
+			DockPanel.SetDock(_buttonClearSearch, System.Windows.Controls.Dock.Right);
+			searchInner.Children.Add(_buttonClearSearch);
+
+			Grid inputGrid = new Grid();
+			inputGrid.VerticalAlignment = VerticalAlignment.Center;
+
+			_labelSearchPlaceholder = new TextBlock();
+			_labelSearchPlaceholder.Text = "Поиск по номеру, владельцу или УЦ...";
+			_labelSearchPlaceholder.FontSize = 13;
+			_labelSearchPlaceholder.VerticalAlignment = VerticalAlignment.Center;
+			_labelSearchPlaceholder.Margin = new Thickness(14, 0, 0, 0);
+			_labelSearchPlaceholder.IsHitTestVisible = false;
+			inputGrid.Children.Add(_labelSearchPlaceholder);
+
 			_textSearchBox = new System.Windows.Controls.TextBox();
 			_textSearchBox.BorderThickness = new Thickness(0);
 			_textSearchBox.Background = Brushes.Transparent;
 			_textSearchBox.VerticalContentAlignment = VerticalAlignment.Center;
+			_textSearchBox.Padding = new Thickness(4, 0, 0, 0);
 			_textSearchBox.FontSize = 13;
 			_textSearchBox.TextChanged += (s, e) =>
 			{
 				_searchFilterQuery = _textSearchBox.Text.Trim();
+				bool hasText = !string.IsNullOrEmpty(_textSearchBox.Text);
+				_labelSearchPlaceholder.Visibility = hasText ? Visibility.Collapsed : Visibility.Visible;
+				_buttonClearSearch.Visibility = hasText ? Visibility.Visible : Visibility.Collapsed;
 				RefreshCertificatesGrid();
 			};
-			searchInner.Children.Add(_textSearchBox);
+			inputGrid.Children.Add(_textSearchBox);
+
+			searchInner.Children.Add(inputGrid);
 
 			_panelSearchContainer.Child = searchInner;
 			panel.Children.Add(_panelSearchContainer);
@@ -623,12 +667,15 @@ namespace CertHarvester
 			grid.ColumnHeaderHeight = 38;
 			grid.BorderThickness = new Thickness(1);
 			grid.EnableRowVirtualization = true;
+			grid.CanUserSortColumns = true;
+			grid.Sorting += GridCertificates_Sorting;
 
 			// 1. Серийный номер
 			grid.Columns.Add(new DataGridTextColumn()
 			{
 				Header = "Серийный номер",
 				Binding = new System.Windows.Data.Binding("SerialNumber"),
+				SortMemberPath = "SerialNumber",
 				Width = new DataGridLength(170)
 			});
 
@@ -637,6 +684,7 @@ namespace CertHarvester
 			{
 				Header = "Дата внесения",
 				Binding = new System.Windows.Data.Binding("DateInsertedDisplay"),
+				SortMemberPath = "DateInserted",
 				Width = new DataGridLength(135)
 			});
 
@@ -645,24 +693,27 @@ namespace CertHarvester
 			{
 				Header = "Дата обновления",
 				Binding = new System.Windows.Data.Binding("DateUpdatedDisplay"),
+				SortMemberPath = "DateUpdated",
 				Width = new DataGridLength(135)
 			});
 
-			// 4. Имя владельца (растягивается пропорционально)
+			// 4. Имя владельца
 			grid.Columns.Add(new DataGridTextColumn()
 			{
 				Header = "Имя владельца",
 				Binding = new System.Windows.Data.Binding("OwnerName"),
-				Width = new DataGridLength(1.3, DataGridLengthUnitType.Star),
+				SortMemberPath = "OwnerName",
+				Width = new DataGridLength(230),
 				MinWidth = 150
 			});
 
-			// 5. Удостоверяющий центр (растягивается пропорционально)
+			// 5. Удостоверяющий центр
 			grid.Columns.Add(new DataGridTextColumn()
 			{
 				Header = "Удостоверяющий центр",
 				Binding = new System.Windows.Data.Binding("Issuer"),
-				Width = new DataGridLength(1.1, DataGridLengthUnitType.Star),
+				SortMemberPath = "Issuer",
+				Width = new DataGridLength(210),
 				MinWidth = 150
 			});
 
@@ -671,6 +722,7 @@ namespace CertHarvester
 			{
 				Header = "Версия КриптоПро",
 				Binding = new System.Windows.Data.Binding("CryptoProVersion"),
+				SortMemberPath = "CryptoProVersion",
 				Width = new DataGridLength(125)
 			});
 
@@ -679,7 +731,8 @@ namespace CertHarvester
 			{
 				Header = "Лицензия встроена",
 				Binding = new System.Windows.Data.Binding("LicenseDisplay"),
-				Width = new DataGridLength(130)
+				SortMemberPath = "HasEmbeddedLicense",
+				Width = new DataGridLength(125)
 			});
 
 			return grid;
@@ -801,6 +854,18 @@ namespace CertHarvester
 			_panelSearchContainer.BorderBrush = cardBorder;
 			_textSearchBox.Foreground = textPrimary;
 			_textSearchBox.CaretBrush = textPrimary;
+
+			if (_labelSearchPlaceholder != null)
+			{
+				_labelSearchPlaceholder.Foreground = isDark 
+					? new SolidColorBrush(Color.FromArgb(125, 243, 244, 246)) 
+					: new SolidColorBrush(Color.FromArgb(125, 17, 24, 39));
+			}
+
+			if (_buttonClearSearch != null)
+			{
+				_buttonClearSearch.Foreground = textSecondary;
+			}
 
 			if (_filterOnlyWithLicense == false)
 			{
@@ -1200,7 +1265,7 @@ namespace CertHarvester
 			}
 		}
 
-		// Обновление отображаемых записей таблицы сертификатов с учетом поиска и фильтрации
+		// Обновление отображаемых записей таблицы сертификатов с учетом поиска, фильтрации и активной сортировки
 		private void RefreshCertificatesGrid()
 		{
 			_displayCertificates.Clear();
@@ -1230,10 +1295,141 @@ namespace CertHarvester
 				_displayCertificates.Add(new CertificateDisplayItem(cert));
 			}
 
-			_gridCertificates.ItemsSource = null;
-			_gridCertificates.ItemsSource = _displayCertificates;
+			ApplySortingToDisplayCertificates();
+			UpdateColumnHeaderSortIndicators();
+
+			if (_gridCertificates.ItemsSource == null)
+			{
+				_gridCertificates.ItemsSource = _displayCertificates;
+			}
+			else
+			{
+				_gridCertificates.Items.Refresh();
+			}
 
 			_labelMetricTotalNumber.Text = _allCertificates.Count.ToString();
+		}
+
+		// Обработчик события клика по заголовку колонки для переключения сортировки (по возрастанию / по убыванию)
+		private void GridCertificates_Sorting(object sender, DataGridSortingEventArgs e)
+		{
+			e.Handled = true;
+
+			string clickedKey = e.Column.SortMemberPath;
+			if (string.IsNullOrEmpty(clickedKey))
+			{
+				return;
+			}
+
+			if (_sortColumnKey == clickedKey)
+			{
+				_isSortAscending = !_isSortAscending;
+			}
+			else
+			{
+				_sortColumnKey = clickedKey;
+				_isSortAscending = true;
+			}
+
+			ApplySortingToDisplayCertificates();
+			UpdateColumnHeaderSortIndicators();
+
+			_gridCertificates.Items.Refresh();
+		}
+
+		// Сортировка отфильтрованного списка сертификатов в соответствии с выбранной колонкой и направлением
+		private void ApplySortingToDisplayCertificates()
+		{
+			if (string.IsNullOrEmpty(_sortColumnKey) || _displayCertificates == null || _displayCertificates.Count <= 1)
+			{
+				return;
+			}
+
+			if (_sortColumnKey == "SerialNumber")
+			{
+				_displayCertificates.Sort((a, b) => _isSortAscending 
+					? string.Compare(a.SerialNumber, b.SerialNumber, StringComparison.OrdinalIgnoreCase) 
+					: string.Compare(b.SerialNumber, a.SerialNumber, StringComparison.OrdinalIgnoreCase));
+			}
+			else if (_sortColumnKey == "DateInserted")
+			{
+				_displayCertificates.Sort((a, b) => _isSortAscending 
+					? a.Record.DateInserted.CompareTo(b.Record.DateInserted) 
+					: b.Record.DateInserted.CompareTo(a.Record.DateInserted));
+			}
+			else if (_sortColumnKey == "DateUpdated")
+			{
+				_displayCertificates.Sort((a, b) => _isSortAscending 
+					? a.Record.DateUpdated.CompareTo(b.Record.DateUpdated) 
+					: b.Record.DateUpdated.CompareTo(a.Record.DateUpdated));
+			}
+			else if (_sortColumnKey == "OwnerName")
+			{
+				_displayCertificates.Sort((a, b) => _isSortAscending 
+					? string.Compare(a.OwnerName, b.OwnerName, StringComparison.CurrentCultureIgnoreCase) 
+					: string.Compare(b.OwnerName, a.OwnerName, StringComparison.CurrentCultureIgnoreCase));
+			}
+			else if (_sortColumnKey == "Issuer")
+			{
+				_displayCertificates.Sort((a, b) => _isSortAscending 
+					? string.Compare(a.Issuer, b.Issuer, StringComparison.CurrentCultureIgnoreCase) 
+					: string.Compare(b.Issuer, a.Issuer, StringComparison.CurrentCultureIgnoreCase));
+			}
+			else if (_sortColumnKey == "CryptoProVersion")
+			{
+				_displayCertificates.Sort((a, b) => _isSortAscending 
+					? string.Compare(a.CryptoProVersion, b.CryptoProVersion, StringComparison.OrdinalIgnoreCase) 
+					: string.Compare(b.CryptoProVersion, a.CryptoProVersion, StringComparison.OrdinalIgnoreCase));
+			}
+			else if (_sortColumnKey == "HasEmbeddedLicense")
+			{
+				_displayCertificates.Sort((a, b) => _isSortAscending 
+					? a.HasEmbeddedLicense.CompareTo(b.HasEmbeddedLicense) 
+					: b.HasEmbeddedLicense.CompareTo(a.HasEmbeddedLicense));
+			}
+		}
+
+		// Обновление заголовков колонок таблицы с добавлением визуальной стрелочки направления сортировки (▲ / ▼)
+		private void UpdateColumnHeaderSortIndicators()
+		{
+			if (_gridCertificates == null)
+			{
+				return;
+			}
+
+			string arrow = _isSortAscending ? "  ▲" : "  ▼";
+
+			for (int i = 0; i < _gridCertificates.Columns.Count; i++)
+			{
+				DataGridColumn column = _gridCertificates.Columns[i];
+				string baseTitle = GetBaseColumnTitle(column.SortMemberPath);
+
+				if (!string.IsNullOrEmpty(_sortColumnKey) && column.SortMemberPath == _sortColumnKey)
+				{
+					column.Header = baseTitle + arrow;
+					column.SortDirection = _isSortAscending 
+						? System.ComponentModel.ListSortDirection.Ascending 
+						: System.ComponentModel.ListSortDirection.Descending;
+				}
+				else
+				{
+					column.Header = baseTitle;
+					column.SortDirection = null;
+				}
+			}
+		}
+
+		// Получение исходного базового наименования колонки без стрелок сортировки
+		private string GetBaseColumnTitle(string sortMemberPath)
+		{
+			if (sortMemberPath == "SerialNumber") return "Серийный номер";
+			if (sortMemberPath == "DateInserted") return "Дата внесения";
+			if (sortMemberPath == "DateUpdated") return "Дата обновления";
+			if (sortMemberPath == "OwnerName") return "Имя владельца";
+			if (sortMemberPath == "Issuer") return "Удостоверяющий центр";
+			if (sortMemberPath == "CryptoProVersion") return "Версия КриптоПро";
+			if (sortMemberPath == "HasEmbeddedLicense") return "Лицензия встроена";
+			return string.Empty;
 		}
 
 		// Переключение фильтра сертификатов со встроенной лицензией
