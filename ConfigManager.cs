@@ -120,6 +120,11 @@ namespace CertHarvester
 				config.NetworkComputers = new List<string>();
 			}
 
+			if (config.ComputerCredentials == null)
+			{
+				config.ComputerCredentials = new List<NetworkComputerCredential>();
+			}
+
 			if (config.Certificates == null)
 			{
 				config.Certificates = new List<CertificateRecord>();

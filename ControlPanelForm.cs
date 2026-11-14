@@ -14,8 +14,8 @@ using System.Windows.Media.Effects;
 using System.Windows.Shapes;
 using HandyControl.Data;
 using HandyControl.Themes;
+using HandyControl.Tools;
 using HcWindow = HandyControl.Controls.Window;
-using HcMessageBox = HandyControl.Controls.MessageBox;
 
 namespace CertHarvester
 {
@@ -27,13 +27,21 @@ namespace CertHarvester
 		public string Name { get; set; }
 		public string IpAddress { get; set; }
 		public string Status { get; set; }
+		public string Username { get; set; }
+		public string Password { get; set; }
+		public bool IsConnected { get; set; }
+		public List<string> CustomDirectories { get; set; }
 
-		// Конструктор модели сетевого узла
-		public NetworkNodeItem(string name, string ipAddress, string status)
+		// Конструктор модели сетевого узла с поддержкой учетных данных и индивидуальных директорий
+		public NetworkNodeItem(string name, string ipAddress, string status, string username = "", string password = "", List<string> customDirectories = null)
 		{
 			Name = name;
 			IpAddress = ipAddress;
 			Status = status;
+			Username = username;
+			Password = password;
+			IsConnected = false;
+			CustomDirectories = customDirectories ?? new List<string>();
 		}
 	}
 
@@ -92,6 +100,7 @@ namespace CertHarvester
 		private TextBlock _labelSidebarDirsHeader;
 		private TextBlock _labelSidebarDbHeader;
 		private System.Windows.Controls.Button _buttonAddComputer;
+		private System.Windows.Controls.Button _buttonManageCredentials;
 		private System.Windows.Controls.Button _buttonAddDirectory;
 		private StackPanel _panelComputersContainer;
 		private StackPanel _panelDirectoriesContainer;
@@ -100,6 +109,7 @@ namespace CertHarvester
 		private System.Windows.Controls.TextBox _textSqlTable;
 		private System.Windows.Controls.CheckBox _checkAutoCreateTable;
 		private System.Windows.Controls.Button _buttonSaveDbSettings;
+		private System.Windows.Controls.Button _buttonClearDbTable;
 
 		// Элементы главной области
 		private TextBlock _labelMainHeader;
@@ -185,6 +195,14 @@ namespace CertHarvester
 				_handyTheme.Skin = SkinType.Default;
 				System.Windows.Application.Current.Resources.MergedDictionaries.Add(_handyTheme);
 			}
+
+			try
+			{
+				ConfigHelper.Instance.SetLang("en");
+			}
+			catch
+			{
+			}
 		}
 
 		// Инициализация структуры окна, компоновки и элементов управления
@@ -246,11 +264,9 @@ namespace CertHarvester
 			_sidebarCard.Padding = new Thickness(12);
 
 			Grid sidebarGrid = new Grid();
-			sidebarGrid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(220) });
-			sidebarGrid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(12) });
-			sidebarGrid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(170) });
-			sidebarGrid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(12) });
 			sidebarGrid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(1, GridUnitType.Star) });
+			sidebarGrid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(14) });
+			sidebarGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
 
 			// Блок 1: Компьютеры в сети
 			Grid compBlock = new Grid();
@@ -266,17 +282,33 @@ namespace CertHarvester
 			Grid.SetRow(_labelSidebarCompHeader, 0);
 			compBlock.Children.Add(_labelSidebarCompHeader);
 
+			StackPanel compButtonsStack = new StackPanel();
+			compButtonsStack.Margin = new Thickness(0, 0, 0, 8);
+
 			_buttonAddComputer = new System.Windows.Controls.Button();
 			_buttonAddComputer.Content = "+   Добавить компьютер...";
-			_buttonAddComputer.Height = 32;
-			_buttonAddComputer.Margin = new Thickness(0, 0, 0, 8);
+			_buttonAddComputer.Height = 28;
+			_buttonAddComputer.Margin = new Thickness(0, 0, 0, 4);
 			_buttonAddComputer.Cursor = System.Windows.Input.Cursors.Hand;
 			_buttonAddComputer.Background = new SolidColorBrush(Color.FromRgb(2, 132, 199));
 			_buttonAddComputer.Foreground = Brushes.White;
 			_buttonAddComputer.FontWeight = FontWeights.SemiBold;
 			_buttonAddComputer.Click += ButtonAddComputer_Click;
-			Grid.SetRow(_buttonAddComputer, 1);
-			compBlock.Children.Add(_buttonAddComputer);
+			compButtonsStack.Children.Add(_buttonAddComputer);
+
+			_buttonManageCredentials = new System.Windows.Controls.Button();
+			_buttonManageCredentials.Content = "🔑   Учетные записи ПК (net use)...";
+			_buttonManageCredentials.Height = 28;
+			_buttonManageCredentials.Margin = new Thickness(0, 0, 0, 0);
+			_buttonManageCredentials.Cursor = System.Windows.Input.Cursors.Hand;
+			_buttonManageCredentials.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+			_buttonManageCredentials.Foreground = Brushes.White;
+			_buttonManageCredentials.FontWeight = FontWeights.SemiBold;
+			_buttonManageCredentials.Click += ButtonManageCredentials_Click;
+			compButtonsStack.Children.Add(_buttonManageCredentials);
+
+			Grid.SetRow(compButtonsStack, 1);
+			compBlock.Children.Add(compButtonsStack);
 
 			_panelComputersContainer = new StackPanel();
 			System.Windows.Controls.ScrollViewer scrollComp = new System.Windows.Controls.ScrollViewer();
@@ -288,43 +320,12 @@ namespace CertHarvester
 			Grid.SetRow(compBlock, 0);
 			sidebarGrid.Children.Add(compBlock);
 
-			// Блок 2: Директории из конфигурации
-			Grid dirBlock = new Grid();
-			dirBlock.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
-			dirBlock.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
-			dirBlock.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(1, GridUnitType.Star) });
-
+			// Инициализация полей директорий для совместимости
 			_labelSidebarDirsHeader = new TextBlock();
-			_labelSidebarDirsHeader.Text = "Директории из конфигурации";
-			_labelSidebarDirsHeader.FontWeight = FontWeights.Bold;
-			_labelSidebarDirsHeader.FontSize = 12;
-			_labelSidebarDirsHeader.Margin = new Thickness(2, 0, 0, 8);
-			Grid.SetRow(_labelSidebarDirsHeader, 0);
-			dirBlock.Children.Add(_labelSidebarDirsHeader);
-
 			_buttonAddDirectory = new System.Windows.Controls.Button();
-			_buttonAddDirectory.Content = "+   Добавить директорию...";
-			_buttonAddDirectory.Height = 32;
-			_buttonAddDirectory.Margin = new Thickness(0, 0, 0, 8);
-			_buttonAddDirectory.Cursor = System.Windows.Input.Cursors.Hand;
-			_buttonAddDirectory.Background = new SolidColorBrush(Color.FromRgb(2, 132, 199));
-			_buttonAddDirectory.Foreground = Brushes.White;
-			_buttonAddDirectory.FontWeight = FontWeights.SemiBold;
-			_buttonAddDirectory.Click += ButtonAddDirectory_Click;
-			Grid.SetRow(_buttonAddDirectory, 1);
-			dirBlock.Children.Add(_buttonAddDirectory);
-
 			_panelDirectoriesContainer = new StackPanel();
-			System.Windows.Controls.ScrollViewer scrollDirs = new System.Windows.Controls.ScrollViewer();
-			scrollDirs.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-			scrollDirs.Content = _panelDirectoriesContainer;
-			Grid.SetRow(scrollDirs, 2);
-			dirBlock.Children.Add(scrollDirs);
 
-			Grid.SetRow(dirBlock, 2);
-			sidebarGrid.Children.Add(dirBlock);
-
-			// Блок 3: База данных MSSQL
+			// Блок 2: База данных MSSQL
 			StackPanel dbBlock = new StackPanel();
 			_labelSidebarDbHeader = new TextBlock();
 			_labelSidebarDbHeader.Text = "База данных MSSQL";
@@ -377,7 +378,19 @@ namespace CertHarvester
 			_buttonSaveDbSettings.Click += ButtonSaveDbSettings_Click;
 			dbBlock.Children.Add(_buttonSaveDbSettings);
 
-			Grid.SetRow(dbBlock, 4);
+			// Кнопка полной очистки таблицы в БД
+			_buttonClearDbTable = new System.Windows.Controls.Button();
+			_buttonClearDbTable.Content = "🗑   Очистить таблицу в БД";
+			_buttonClearDbTable.Height = 30;
+			_buttonClearDbTable.Margin = new Thickness(0, 6, 0, 0);
+			_buttonClearDbTable.Cursor = System.Windows.Input.Cursors.Hand;
+			_buttonClearDbTable.Background = new SolidColorBrush(Color.FromRgb(185, 28, 28));
+			_buttonClearDbTable.Foreground = Brushes.White;
+			_buttonClearDbTable.FontWeight = FontWeights.SemiBold;
+			_buttonClearDbTable.Click += ButtonClearDbTable_Click;
+			dbBlock.Children.Add(_buttonClearDbTable);
+
+			Grid.SetRow(dbBlock, 2);
 			sidebarGrid.Children.Add(dbBlock);
 
 			_sidebarCard.Child = sidebarGrid;
@@ -530,6 +543,7 @@ namespace CertHarvester
 			_progressBarCustom.Height = 8;
 			_progressBarCustom.Margin = new Thickness(0, 8, 0, 6);
 			_progressBarCustom.Value = 0;
+			_progressBarCustom.Template = CreateModernProgressBarTemplate();
 			_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(2, 132, 199));
 			Grid.SetRow(_progressBarCustom, 1);
 			progressGrid.Children.Add(_progressBarCustom);
@@ -543,6 +557,21 @@ namespace CertHarvester
 			cardsGrid.Children.Add(_cardMetricProgress);
 
 			return cardsGrid;
+		}
+
+		// Создание чистого шаблона полосы прогресса без отображения процентов внутри индикатора
+		private ControlTemplate CreateModernProgressBarTemplate()
+		{
+			string xaml = @"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+							xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
+							TargetType='ProgressBar'>
+				<Grid Name='TemplateRoot' ClipToBounds='True' SnapsToDevicePixels='True'>
+					<Border x:Name='PART_Track' Background='{TemplateBinding Background}' CornerRadius='4' />
+					<Border x:Name='PART_Indicator' HorizontalAlignment='Left' Background='{TemplateBinding Foreground}' CornerRadius='4' />
+				</Grid>
+			</ControlTemplate>";
+
+			return (ControlTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
 		}
 
 		// Вспомогательный метод создания базовой карточки метрики
@@ -848,6 +877,8 @@ namespace CertHarvester
 			_labelProgressSummary.Foreground = textPrimary;
 			_labelProgressPercent.Foreground = textSecondary;
 			_labelProgressCurrentNode.Foreground = textSecondary;
+			_progressBarCustom.Background = isDark ? new SolidColorBrush(Color.FromRgb(51, 65, 85)) : new SolidColorBrush(Color.FromRgb(226, 232, 240));
+			_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(14, 165, 233));
 
 			// Поиск и фильтрация
 			_panelSearchContainer.Background = cardBg;
@@ -1029,7 +1060,31 @@ namespace CertHarvester
 			for (int i = 0; i < _currentConfig.NetworkComputers.Count; i++)
 			{
 				string compEntry = _currentConfig.NetworkComputers[i];
-				_networkNodes.Add(ParseNetworkNode(compEntry));
+				NetworkNodeItem node = ParseNetworkNode(compEntry);
+				if (_currentConfig.ComputerCredentials != null)
+				{
+					for (int c = 0; c < _currentConfig.ComputerCredentials.Count; c++)
+					{
+						NetworkComputerCredential cred = _currentConfig.ComputerCredentials[c];
+						if (cred != null && (string.Equals(cred.ComputerAddress, node.Name, StringComparison.OrdinalIgnoreCase) || string.Equals(cred.ComputerAddress, node.IpAddress, StringComparison.OrdinalIgnoreCase)))
+						{
+							node.Username = cred.Username;
+							node.Password = cred.Password;
+							node.IsConnected = cred.IsConnected;
+							if (cred.CustomDirectories != null)
+							{
+								node.CustomDirectories = new List<string>(cred.CustomDirectories);
+							}
+							break;
+						}
+					}
+				}
+
+				if (node.CustomDirectories.Count == 0 && _currentConfig.ScanDirectories != null && _currentConfig.ScanDirectories.Count > 0)
+				{
+					node.CustomDirectories = new List<string>(_currentConfig.ScanDirectories);
+				}
+				_networkNodes.Add(node);
 			}
 			RenderComputersList();
 			RenderDirectoriesList();
@@ -1149,6 +1204,29 @@ namespace CertHarvester
 				itemBorder.Padding = new Thickness(6);
 
 				System.Windows.Controls.ContextMenu cm = new System.Windows.Controls.ContextMenu();
+				System.Windows.Controls.MenuItem credItem = new System.Windows.Controls.MenuItem() { Header = "🔑 Учетные записи (net use)..." };
+				credItem.Click += (s, e) => ButtonManageCredentials_Click(s, e);
+				cm.Items.Add(credItem);
+
+				System.Windows.Controls.MenuItem connectItem = new System.Windows.Controls.MenuItem() { Header = "🔌 Подключить сейчас (net use)" };
+				connectItem.Click += async (s, e) =>
+				{
+					string outMsg = string.Empty;
+					bool ok = await Task.Run(() => CertificateScanner.EstablishNetworkSession(node.IpAddress, node.Username, node.Password, out outMsg));
+					node.IsConnected = ok;
+					SyncAndSaveComputersToConfig();
+					RenderComputersList();
+					if (ok == true)
+					{
+						AppendTerminalLog(string.Format("{0} - Успешное net use подключение к {1} ({2}) под пользователем {3}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, node.IpAddress, node.Username), Color.FromRgb(52, 211, 153));
+					}
+					else
+					{
+						AppendTerminalLog(string.Format("{0} - Ошибка net use к {1} ({2}): {3}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, node.IpAddress, outMsg), Color.FromRgb(248, 113, 113));
+					}
+				};
+				cm.Items.Add(connectItem);
+
 				System.Windows.Controls.MenuItem delItem = new System.Windows.Controls.MenuItem() { Header = "Удалить компьютер" };
 				delItem.Click += (s, e) =>
 				{
@@ -1174,6 +1252,30 @@ namespace CertHarvester
 				TextBlock ipBlock = new TextBlock() { Text = node.IpAddress, FontSize = 10, Foreground = ipText };
 				textStack.Children.Add(nameBlock);
 				textStack.Children.Add(ipBlock);
+
+				if (!string.IsNullOrEmpty(node.Username))
+				{
+					TextBlock userBlock = new TextBlock()
+					{
+						Text = string.Format("👤 {0}{1}", node.Username, node.IsConnected ? " (net use: ✓)" : ""),
+						FontSize = 9,
+						Foreground = node.IsConnected ? new SolidColorBrush(Color.FromRgb(52, 211, 153)) : new SolidColorBrush(Color.FromRgb(147, 197, 253))
+					};
+					textStack.Children.Add(userBlock);
+				}
+
+				if (node.CustomDirectories != null && node.CustomDirectories.Count > 0)
+				{
+					TextBlock dirsBlock = new TextBlock()
+					{
+						Text = string.Format("📁 Папок: {0}", node.CustomDirectories.Count),
+						FontSize = 9,
+						Foreground = new SolidColorBrush(Color.FromRgb(251, 191, 36)),
+						Margin = new Thickness(0, 1, 0, 0)
+					};
+					textStack.Children.Add(dirsBlock);
+				}
+
 				dock.Children.Add(textStack);
 
 				itemBorder.Child = dock;
@@ -1223,10 +1325,21 @@ namespace CertHarvester
 		private void SyncAndSaveComputersToConfig()
 		{
 			_currentConfig.NetworkComputers.Clear();
+			if (_currentConfig.ComputerCredentials == null)
+			{
+				_currentConfig.ComputerCredentials = new List<NetworkComputerCredential>();
+			}
+			_currentConfig.ComputerCredentials.Clear();
+
 			for (int i = 0; i < _networkNodes.Count; i++)
 			{
 				NetworkNodeItem node = _networkNodes[i];
 				_currentConfig.NetworkComputers.Add(string.Format("{0} ({1})", node.Name, node.IpAddress));
+				_currentConfig.ComputerCredentials.Add(new NetworkComputerCredential(node.IpAddress, node.Username, node.Password)
+				{
+					IsConnected = node.IsConnected,
+					CustomDirectories = new List<string>(node.CustomDirectories)
+				});
 			}
 			ConfigManager.SaveConfig(_currentConfig);
 		}
@@ -1455,12 +1568,12 @@ namespace CertHarvester
 			RefreshCertificatesGrid();
 		}
 
-		// Диалоговое добавление нового компьютера в список сетевых узлов
+		// Диалоговое добавление нового компьютера в список сетевых узлов с опциональными учетными данными net use
 		private void ButtonAddComputer_Click(object sender, RoutedEventArgs e)
 		{
 			HcWindow prompt = new HcWindow();
-			prompt.Width = 360;
-			prompt.Height = 220;
+			prompt.Width = 380;
+			prompt.Height = 340;
 			prompt.Title = "Добавить компьютер в сеть";
 			prompt.WindowStartupLocation = WindowStartupLocation.CenterOwner;
 			prompt.Owner = this;
@@ -1468,21 +1581,32 @@ namespace CertHarvester
 
 			StackPanel promptStack = new StackPanel() { Margin = new Thickness(16) };
 			promptStack.Children.Add(new TextBlock() { Text = "Имя ПК:", FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
-			System.Windows.Controls.TextBox nameBox = new System.Windows.Controls.TextBox() { Text = "PC-NODE-01", Height = 28, Margin = new Thickness(0, 0, 0, 10) };
+			System.Windows.Controls.TextBox nameBox = new System.Windows.Controls.TextBox() { Text = "PC-NODE-01", Height = 28, Margin = new Thickness(0, 0, 0, 8), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
 			promptStack.Children.Add(nameBox);
 
 			promptStack.Children.Add(new TextBlock() { Text = "IP адрес:", FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
-			System.Windows.Controls.TextBox ipBox = new System.Windows.Controls.TextBox() { Text = "192.168.1.100", Height = 28, Margin = new Thickness(0, 0, 0, 14) };
+			System.Windows.Controls.TextBox ipBox = new System.Windows.Controls.TextBox() { Text = "192.168.1.100", Height = 28, Margin = new Thickness(0, 0, 0, 8), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
 			promptStack.Children.Add(ipBox);
 
-			System.Windows.Controls.Button btnOk = new System.Windows.Controls.Button() { Content = "Добавить", Height = 32, FontWeight = FontWeights.Bold, Background = new SolidColorBrush(Color.FromRgb(2, 132, 199)), Foreground = Brushes.White, Cursor = System.Windows.Input.Cursors.Hand };
+			promptStack.Children.Add(new TextBlock() { Text = "Логин (пользователь для net use):", FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
+			System.Windows.Controls.TextBox userBox = new System.Windows.Controls.TextBox() { Text = "Admin", Height = 28, Margin = new Thickness(0, 0, 0, 8), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
+			promptStack.Children.Add(userBox);
+
+			promptStack.Children.Add(new TextBlock() { Text = "Пароль (для net use):", FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
+			System.Windows.Controls.TextBox passBox = new System.Windows.Controls.TextBox() { Text = "", Height = 28, Margin = new Thickness(0, 0, 0, 14), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
+			promptStack.Children.Add(passBox);
+
+			System.Windows.Controls.Button btnOk = new System.Windows.Controls.Button() { Content = "Добавить компьютер", Height = 32, FontWeight = FontWeights.Bold, Background = new SolidColorBrush(Color.FromRgb(2, 132, 199)), Foreground = Brushes.White, Cursor = System.Windows.Input.Cursors.Hand };
 			btnOk.Click += (s, ev) =>
 			{
 				string name = nameBox.Text.Trim();
 				string ip = ipBox.Text.Trim();
+				string user = userBox.Text.Trim();
+				string pass = passBox.Text;
+
 				if (!string.IsNullOrEmpty(name))
 				{
-					_networkNodes.Add(new NetworkNodeItem(name, ip, "В очереди"));
+					_networkNodes.Add(new NetworkNodeItem(name, ip, "В очереди", user, pass));
 					SyncAndSaveComputersToConfig();
 					RenderComputersList();
 					UpdateProgressCardSummary();
@@ -1494,6 +1618,585 @@ namespace CertHarvester
 
 			prompt.Content = promptStack;
 			prompt.ShowDialog();
+		}
+
+		// Диалоговое окно управления учетными записями компьютеров сети и подключения через net use
+		private void ButtonManageCredentials_Click(object sender, RoutedEventArgs e)
+		{
+			HcWindow window = new HcWindow();
+			window.Title = "Управление доступом к компьютерам сети (net use)";
+			window.Width = 920;
+			window.Height = 650;
+			window.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+			window.Owner = this;
+			window.ResizeMode = ResizeMode.NoResize;
+
+			Brush winBg = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(21, 28, 44)) : new SolidColorBrush(Color.FromRgb(248, 250, 252));
+			Brush cardBg = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(30, 41, 59)) : Brushes.White;
+			Brush cardBorder = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(51, 65, 85)) : new SolidColorBrush(Color.FromRgb(226, 232, 240));
+			Brush textPrimary = _isDarkTheme ? Brushes.White : new SolidColorBrush(Color.FromRgb(15, 23, 42));
+			Brush textSecondary = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(148, 163, 184)) : new SolidColorBrush(Color.FromRgb(100, 116, 139));
+			Brush inputBg = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(15, 23, 42)) : Brushes.White;
+			Brush inputBorder = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(71, 85, 105)) : new SolidColorBrush(Color.FromRgb(203, 213, 225));
+
+			window.Background = winBg;
+
+			Grid mainLayout = new Grid() { Margin = new Thickness(16) };
+			mainLayout.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+			mainLayout.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+			mainLayout.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(1, GridUnitType.Star) });
+			mainLayout.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+			mainLayout.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+
+			// 1. Заголовок диалога
+			StackPanel headerStack = new StackPanel() { Margin = new Thickness(0, 0, 0, 10) };
+			TextBlock title = new TextBlock()
+			{
+				Text = "🔑  Сетевые учетные записи и авторизация ПК (net use)",
+				FontSize = 15,
+				FontWeight = FontWeights.Bold,
+				Foreground = textPrimary
+			};
+			TextBlock subtitle = new TextBlock()
+			{
+				Text = "Для доступа к реестру и скрытым дискам выполняется: net use \\\\IP\\IPC$ \"Пароль\" /user:\"Пользователь\"",
+				FontSize = 11,
+				Foreground = textSecondary,
+				Margin = new Thickness(0, 4, 0, 0)
+			};
+			headerStack.Children.Add(title);
+			headerStack.Children.Add(subtitle);
+			Grid.SetRow(headerStack, 0);
+			mainLayout.Children.Add(headerStack);
+
+			// 2. Верхняя панель групповых действий
+			DockPanel toolbar = new DockPanel() { Margin = new Thickness(0, 0, 0, 10) };
+			System.Windows.Controls.Button btnConnectAll = new System.Windows.Controls.Button()
+			{
+				Content = "🔌  Подключить все ПК (net use)",
+				Height = 28,
+				Padding = new Thickness(12, 0, 12, 0),
+				Background = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
+				Foreground = Brushes.White,
+				FontWeight = FontWeights.SemiBold,
+				Cursor = System.Windows.Input.Cursors.Hand
+			};
+			DockPanel.SetDock(btnConnectAll, System.Windows.Controls.Dock.Left);
+			toolbar.Children.Add(btnConnectAll);
+
+			System.Windows.Controls.Button btnDisconnectAll = new System.Windows.Controls.Button()
+			{
+				Content = "❌  Сбросить все подключения",
+				Height = 28,
+				Margin = new Thickness(8, 0, 0, 0),
+				Padding = new Thickness(12, 0, 12, 0),
+				Background = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+				Foreground = Brushes.White,
+				FontWeight = FontWeights.SemiBold,
+				Cursor = System.Windows.Input.Cursors.Hand
+			};
+			DockPanel.SetDock(btnDisconnectAll, System.Windows.Controls.Dock.Left);
+			toolbar.Children.Add(btnDisconnectAll);
+
+			Grid.SetRow(toolbar, 1);
+			mainLayout.Children.Add(toolbar);
+
+			// 3. Прокручиваемый список компьютеров
+			StackPanel itemsContainer = new StackPanel();
+			System.Windows.Controls.ScrollViewer scrollViewer = new System.Windows.Controls.ScrollViewer()
+			{
+				VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+				Margin = new Thickness(0, 0, 0, 10)
+			};
+			scrollViewer.Content = itemsContainer;
+			Grid.SetRow(scrollViewer, 2);
+			mainLayout.Children.Add(scrollViewer);
+
+			Action renderCredentialRows = null;
+			renderCredentialRows = () =>
+			{
+				itemsContainer.Children.Clear();
+				if (_networkNodes.Count == 0)
+				{
+					TextBlock emptyNotice = new TextBlock()
+					{
+						Text = "Список компьютеров пуст. Добавьте сетевой компьютер через форму ниже.",
+						FontSize = 12,
+						Foreground = textSecondary,
+						HorizontalAlignment = HorizontalAlignment.Center,
+						Margin = new Thickness(0, 30, 0, 0)
+					};
+					itemsContainer.Children.Add(emptyNotice);
+					return;
+				}
+
+				for (int i = 0; i < _networkNodes.Count; i++)
+				{
+					NetworkNodeItem node = _networkNodes[i];
+					Border rowBorder = new Border()
+					{
+						Background = cardBg,
+						BorderBrush = cardBorder,
+						BorderThickness = new Thickness(1),
+						CornerRadius = new CornerRadius(6),
+						Margin = new Thickness(0, 0, 0, 8),
+						Padding = new Thickness(10)
+					};
+
+					Grid rowGrid = new Grid();
+					rowGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(170) });
+					rowGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(160) });
+					rowGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(160) });
+					rowGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(120) });
+					rowGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
+
+					// Данные узла
+					StackPanel pcInfo = new StackPanel() { VerticalAlignment = VerticalAlignment.Center };
+					TextBlock pcName = new TextBlock() { Text = "💻 " + node.Name, FontWeight = FontWeights.Bold, FontSize = 12, Foreground = textPrimary };
+					TextBlock pcIp = new TextBlock() { Text = node.IpAddress, FontSize = 10, Foreground = textSecondary };
+					pcInfo.Children.Add(pcName);
+					pcInfo.Children.Add(pcIp);
+					Grid.SetColumn(pcInfo, 0);
+					rowGrid.Children.Add(pcInfo);
+
+					// Поле ввода пользователя
+					StackPanel userStack = new StackPanel() { Margin = new Thickness(4, 0, 8, 0) };
+					userStack.Children.Add(new TextBlock() { Text = "Пользователь:", FontSize = 9, Foreground = textSecondary, Margin = new Thickness(0, 0, 0, 2) });
+					System.Windows.Controls.TextBox userBox = new System.Windows.Controls.TextBox()
+					{
+						Text = node.Username,
+						Height = 26,
+						Background = inputBg,
+						Foreground = textPrimary,
+						BorderBrush = inputBorder,
+						VerticalContentAlignment = VerticalAlignment.Center,
+						Padding = new Thickness(4, 0, 4, 0)
+					};
+					userBox.TextChanged += (s, ev) => node.Username = userBox.Text.Trim();
+					userStack.Children.Add(userBox);
+					Grid.SetColumn(userStack, 1);
+					rowGrid.Children.Add(userStack);
+
+					// Поле ввода пароля
+					StackPanel passStack = new StackPanel() { Margin = new Thickness(4, 0, 8, 0) };
+					passStack.Children.Add(new TextBlock() { Text = "Пароль:", FontSize = 9, Foreground = textSecondary, Margin = new Thickness(0, 0, 0, 2) });
+					System.Windows.Controls.TextBox passBox = new System.Windows.Controls.TextBox()
+					{
+						Text = node.Password,
+						Height = 26,
+						Background = inputBg,
+						Foreground = textPrimary,
+						BorderBrush = inputBorder,
+						VerticalContentAlignment = VerticalAlignment.Center,
+						Padding = new Thickness(4, 0, 4, 0)
+					};
+					passBox.TextChanged += (s, ev) => node.Password = passBox.Text;
+					passStack.Children.Add(passBox);
+					Grid.SetColumn(passStack, 2);
+					rowGrid.Children.Add(passStack);
+
+					// Индикатор подключения
+					Border statusBadge = new Border()
+					{
+						CornerRadius = new CornerRadius(4),
+						Padding = new Thickness(8, 4, 8, 4),
+						HorizontalAlignment = HorizontalAlignment.Left,
+						VerticalAlignment = VerticalAlignment.Center
+					};
+					TextBlock statusText = new TextBlock() { FontSize = 10, FontWeight = FontWeights.Bold };
+					if (node.IsConnected == true)
+					{
+						statusBadge.Background = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(6, 78, 59)) : new SolidColorBrush(Color.FromRgb(220, 252, 231));
+						statusText.Text = "✓ Подключен";
+						statusText.Foreground = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(52, 211, 153)) : new SolidColorBrush(Color.FromRgb(22, 163, 74));
+					}
+					else
+					{
+						statusBadge.Background = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(55, 65, 81)) : new SolidColorBrush(Color.FromRgb(243, 244, 246));
+						statusText.Text = "— Не подключен";
+						statusText.Foreground = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(156, 163, 175)) : new SolidColorBrush(Color.FromRgb(107, 114, 128));
+					}
+					statusBadge.Child = statusText;
+					Grid.SetColumn(statusBadge, 3);
+					rowGrid.Children.Add(statusBadge);
+
+					// Кнопки строки
+					StackPanel actionStack = new StackPanel() { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+					System.Windows.Controls.Button btnConnectSingle = new System.Windows.Controls.Button()
+					{
+						Content = "🔌  Подключить",
+						Height = 26,
+						Margin = new Thickness(0, 0, 6, 0),
+						Padding = new Thickness(8, 0, 8, 0),
+						Background = new SolidColorBrush(Color.FromRgb(16, 185, 129)),
+						Foreground = Brushes.White,
+						FontWeight = FontWeights.SemiBold,
+						Cursor = System.Windows.Input.Cursors.Hand
+					};
+					btnConnectSingle.Click += async (s, ev) =>
+					{
+						btnConnectSingle.IsEnabled = false;
+						btnConnectSingle.Content = "⏳...";
+						string targetHost = node.IpAddress;
+						string user = userBox.Text.Trim();
+						string pass = passBox.Text;
+						node.Username = user;
+						node.Password = pass;
+
+						string outMsg = string.Empty;
+						bool ok = await Task.Run(() => CertificateScanner.EstablishNetworkSession(targetHost, user, pass, out outMsg));
+						node.IsConnected = ok;
+						btnConnectSingle.IsEnabled = true;
+						btnConnectSingle.Content = "🔌  Подключить";
+
+						if (ok == true)
+						{
+							statusBadge.Background = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(6, 78, 59)) : new SolidColorBrush(Color.FromRgb(220, 252, 231));
+							statusText.Text = "✓ Подключен";
+							statusText.Foreground = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(52, 211, 153)) : new SolidColorBrush(Color.FromRgb(22, 163, 74));
+							AppendTerminalLog(string.Format("{0} - Успешное net use подключение к {1} ({2}) под пользователем {3}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, node.IpAddress, user), Color.FromRgb(52, 211, 153));
+						}
+						else
+						{
+							statusBadge.Background = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(127, 29, 29)) : new SolidColorBrush(Color.FromRgb(254, 226, 226));
+							statusText.Text = "❌ Ошибка";
+							statusText.Foreground = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(248, 113, 113)) : new SolidColorBrush(Color.FromRgb(220, 38, 38));
+							AppendTerminalLog(string.Format("{0} - Ошибка net use к {1} ({2}): {3}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, node.IpAddress, outMsg), Color.FromRgb(248, 113, 113));
+							ShowAppMessage("Не удалось выполнить net use: " + outMsg, "Ошибка подключения", MessageBoxImage.Warning);
+						}
+						SyncAndSaveComputersToConfig();
+						RenderComputersList();
+					};
+					actionStack.Children.Add(btnConnectSingle);
+
+					System.Windows.Controls.Button btnDeleteRow = new System.Windows.Controls.Button()
+					{
+						Content = "✕",
+						Height = 26,
+						Width = 26,
+						Background = new SolidColorBrush(Color.FromRgb(239, 68, 68)),
+						Foreground = Brushes.White,
+						FontWeight = FontWeights.Bold,
+						Cursor = System.Windows.Input.Cursors.Hand,
+						ToolTip = "Удалить компьютер из списка"
+					};
+					btnDeleteRow.Click += (s, ev) =>
+					{
+						_networkNodes.Remove(node);
+						SyncAndSaveComputersToConfig();
+						renderCredentialRows();
+						RenderComputersList();
+						UpdateProgressCardSummary();
+					};
+					actionStack.Children.Add(btnDeleteRow);
+
+					Grid.SetColumn(actionStack, 4);
+					rowGrid.Children.Add(actionStack);
+
+					StackPanel cardContent = new StackPanel();
+					cardContent.Children.Add(rowGrid);
+
+					// Секция индивидуальных директорий для поиска сертификатов на данном ПК
+					Border dirsSectionBorder = new Border()
+					{
+						Background = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(24, 33, 47)) : new SolidColorBrush(Color.FromRgb(241, 245, 249)),
+						CornerRadius = new CornerRadius(4),
+						Margin = new Thickness(0, 8, 0, 0),
+						Padding = new Thickness(8, 6, 8, 6)
+					};
+
+					StackPanel dirsStack = new StackPanel();
+					DockPanel dirsHeader = new DockPanel();
+					TextBlock dirsTitle = new TextBlock()
+					{
+						Text = "📁  Директории для дополнительного поиска на этом ПК:",
+						FontSize = 10,
+						FontWeight = FontWeights.SemiBold,
+						Foreground = textSecondary,
+						VerticalAlignment = VerticalAlignment.Center
+					};
+					DockPanel.SetDock(dirsTitle, System.Windows.Controls.Dock.Left);
+					dirsHeader.Children.Add(dirsTitle);
+
+					System.Windows.Controls.Button btnAddDirToNode = new System.Windows.Controls.Button()
+					{
+						Content = "+  Добавить директорию...",
+						Height = 22,
+						Padding = new Thickness(8, 0, 8, 0),
+						Background = new SolidColorBrush(Color.FromRgb(2, 132, 199)),
+						Foreground = Brushes.White,
+						FontSize = 10,
+						FontWeight = FontWeights.SemiBold,
+						Cursor = System.Windows.Input.Cursors.Hand,
+						HorizontalAlignment = HorizontalAlignment.Right
+					};
+					DockPanel.SetDock(btnAddDirToNode, System.Windows.Controls.Dock.Right);
+					dirsHeader.Children.Add(btnAddDirToNode);
+					dirsStack.Children.Add(dirsHeader);
+
+					WrapPanel dirsListWrap = new WrapPanel() { Margin = new Thickness(0, 4, 0, 0) };
+					Action renderNodeDirs = null;
+					renderNodeDirs = () =>
+					{
+						dirsListWrap.Children.Clear();
+						if (node.CustomDirectories.Count == 0)
+						{
+							dirsListWrap.Children.Add(new TextBlock()
+							{
+								Text = "Индивидуальные папки не заданы (поиск выполняется в реестре и хранилищах)",
+								FontSize = 9,
+								Foreground = textSecondary,
+								FontStyle = FontStyles.Italic,
+								Margin = new Thickness(0, 2, 0, 2)
+							});
+							return;
+						}
+
+						for (int dIdx = 0; dIdx < node.CustomDirectories.Count; dIdx++)
+						{
+							string dirPath = node.CustomDirectories[dIdx];
+							Border dirBadge = new Border()
+							{
+								Background = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(30, 41, 59)) : Brushes.White,
+								BorderBrush = cardBorder,
+								BorderThickness = new Thickness(1),
+								CornerRadius = new CornerRadius(3),
+								Padding = new Thickness(6, 2, 6, 2),
+								Margin = new Thickness(0, 0, 6, 4)
+							};
+							DockPanel dirBadgeDock = new DockPanel();
+							TextBlock dirText = new TextBlock()
+							{
+								Text = dirPath,
+								FontSize = 10,
+								Foreground = textPrimary,
+								Margin = new Thickness(0, 0, 6, 0),
+								VerticalAlignment = VerticalAlignment.Center
+							};
+							DockPanel.SetDock(dirText, System.Windows.Controls.Dock.Left);
+							dirBadgeDock.Children.Add(dirText);
+
+							System.Windows.Controls.Button btnRemoveDir = new System.Windows.Controls.Button()
+							{
+								Content = "✕",
+								Width = 16,
+								Height = 16,
+								Padding = new Thickness(0),
+								Background = Brushes.Transparent,
+								Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)),
+								BorderThickness = new Thickness(0),
+								FontWeight = FontWeights.Bold,
+								FontSize = 9,
+								Cursor = System.Windows.Input.Cursors.Hand,
+								ToolTip = "Удалить папку"
+							};
+							string capturedDir = dirPath;
+							btnRemoveDir.Click += (s2, e2) =>
+							{
+								node.CustomDirectories.Remove(capturedDir);
+								renderNodeDirs();
+								SyncAndSaveComputersToConfig();
+							};
+							DockPanel.SetDock(btnRemoveDir, System.Windows.Controls.Dock.Right);
+							dirBadgeDock.Children.Add(btnRemoveDir);
+
+							dirBadge.Child = dirBadgeDock;
+							dirsListWrap.Children.Add(dirBadge);
+						}
+					};
+
+					btnAddDirToNode.Click += (s2, e2) =>
+					{
+						using (System.Windows.Forms.FolderBrowserDialog fbd = new System.Windows.Forms.FolderBrowserDialog())
+						{
+							fbd.Description = "Выберите директорию для поиска сертификатов на компьютере " + node.Name;
+							fbd.ShowNewFolderButton = true;
+							if (fbd.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(fbd.SelectedPath))
+							{
+								if (!node.CustomDirectories.Contains(fbd.SelectedPath))
+								{
+									node.CustomDirectories.Add(fbd.SelectedPath);
+									renderNodeDirs();
+									SyncAndSaveComputersToConfig();
+								}
+							}
+						}
+					};
+
+					renderNodeDirs();
+					dirsStack.Children.Add(dirsListWrap);
+					dirsSectionBorder.Child = dirsStack;
+					cardContent.Children.Add(dirsSectionBorder);
+
+					rowBorder.Child = cardContent;
+					itemsContainer.Children.Add(rowBorder);
+				}
+			};
+
+			renderCredentialRows();
+
+			// Обработчик "Подключить все"
+			btnConnectAll.Click += async (s, ev) =>
+			{
+				btnConnectAll.IsEnabled = false;
+				btnConnectAll.Content = "⏳  Подключение...";
+				AppendTerminalLog(string.Format("{0} - Запуск массового подключения net use ко всем сетевым узлам...", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff")), Color.FromRgb(96, 165, 250));
+
+				int successCount = 0;
+				for (int i = 0; i < _networkNodes.Count; i++)
+				{
+					NetworkNodeItem node = _networkNodes[i];
+					if (!string.IsNullOrWhiteSpace(node.Username))
+					{
+						string outMsg = string.Empty;
+						bool ok = await Task.Run(() => CertificateScanner.EstablishNetworkSession(node.IpAddress, node.Username, node.Password, out outMsg));
+						node.IsConnected = ok;
+						if (ok == true)
+						{
+							successCount = successCount + 1;
+						}
+					}
+				}
+
+				btnConnectAll.IsEnabled = true;
+				btnConnectAll.Content = "🔌  Подключить все ПК (net use)";
+				SyncAndSaveComputersToConfig();
+				renderCredentialRows();
+				RenderComputersList();
+				AppendTerminalLog(string.Format("{0} - Массовое подключение завершено. Успешно подключено: {1} из {2} ПК", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), successCount, _networkNodes.Count), Color.FromRgb(52, 211, 153));
+				ShowAppMessage(string.Format("Сетевые сессии установлены для {0} из {1} ПК!", successCount, _networkNodes.Count), "Авторизация net use", MessageBoxImage.Information);
+			};
+
+			// Обработчик "Сбросить все"
+			btnDisconnectAll.Click += async (s, ev) =>
+			{
+				btnDisconnectAll.IsEnabled = false;
+				for (int i = 0; i < _networkNodes.Count; i++)
+				{
+					NetworkNodeItem node = _networkNodes[i];
+					await Task.Run(() => CertificateScanner.DisconnectNetworkSession(node.IpAddress));
+					node.IsConnected = false;
+				}
+				btnDisconnectAll.IsEnabled = true;
+				SyncAndSaveComputersToConfig();
+				renderCredentialRows();
+				RenderComputersList();
+				AppendTerminalLog(string.Format("{0} - Все сетевые сессии net use сброшены", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff")), Color.FromRgb(156, 163, 175));
+			};
+
+			// 4. Форма быстрого добавления нового компьютера
+			Border addCard = new Border()
+			{
+				Background = cardBg,
+				BorderBrush = cardBorder,
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(6),
+				Padding = new Thickness(10),
+				Margin = new Thickness(0, 0, 0, 10)
+			};
+
+			Grid addGrid = new Grid();
+			addGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+			addGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+
+			TextBlock addTitle = new TextBlock()
+			{
+				Text = "+ Добавить новый компьютер с логином и паролем:",
+				FontWeight = FontWeights.Bold,
+				FontSize = 11,
+				Foreground = textPrimary,
+				Margin = new Thickness(0, 0, 0, 6)
+			};
+			Grid.SetRow(addTitle, 0);
+			addGrid.Children.Add(addTitle);
+
+			Grid inputFieldsGrid = new Grid();
+			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(140) });
+			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(140) });
+			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(140) });
+			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(140) });
+			inputFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
+
+			System.Windows.Controls.TextBox newNameBox = new System.Windows.Controls.TextBox() { Text = "12DEV", Height = 28, Margin = new Thickness(0, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
+			System.Windows.Controls.TextBox newIpBox = new System.Windows.Controls.TextBox() { Text = "192.168.1.50", Height = 28, Margin = new Thickness(0, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
+			System.Windows.Controls.TextBox newUserBox = new System.Windows.Controls.TextBox() { Text = "Admin", Height = 28, Margin = new Thickness(0, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
+			System.Windows.Controls.TextBox newPassBox = new System.Windows.Controls.TextBox() { Text = "", Height = 28, Margin = new Thickness(0, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
+
+			Grid.SetColumn(newNameBox, 0);
+			Grid.SetColumn(newIpBox, 1);
+			Grid.SetColumn(newUserBox, 2);
+			Grid.SetColumn(newPassBox, 3);
+			inputFieldsGrid.Children.Add(newNameBox);
+			inputFieldsGrid.Children.Add(newIpBox);
+			inputFieldsGrid.Children.Add(newUserBox);
+			inputFieldsGrid.Children.Add(newPassBox);
+
+			System.Windows.Controls.Button btnAddNew = new System.Windows.Controls.Button()
+			{
+				Content = "+ Добавить",
+				Height = 28,
+				Background = new SolidColorBrush(Color.FromRgb(2, 132, 199)),
+				Foreground = Brushes.White,
+				FontWeight = FontWeights.Bold,
+				Cursor = System.Windows.Input.Cursors.Hand
+			};
+			btnAddNew.Click += (s, ev) =>
+			{
+				string name = newNameBox.Text.Trim();
+				string ip = newIpBox.Text.Trim();
+				string user = newUserBox.Text.Trim();
+				string pass = newPassBox.Text;
+
+				if (!string.IsNullOrEmpty(name))
+				{
+					_networkNodes.Add(new NetworkNodeItem(name, ip, "В очереди", user, pass));
+					SyncAndSaveComputersToConfig();
+					renderCredentialRows();
+					RenderComputersList();
+					UpdateProgressCardSummary();
+					AppendTerminalLog(string.Format("{0} - Добавлен новый сетевой ПК с учетными данными: {1} ({2}), пользователь: {3}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), name, ip, user), Color.FromRgb(96, 165, 250));
+					newNameBox.Text = "PC-NODE-" + (_networkNodes.Count + 1);
+					newPassBox.Text = string.Empty;
+				}
+			};
+			Grid.SetColumn(btnAddNew, 4);
+			inputFieldsGrid.Children.Add(btnAddNew);
+
+			Grid.SetRow(inputFieldsGrid, 1);
+			addGrid.Children.Add(inputFieldsGrid);
+
+			addCard.Child = addGrid;
+			Grid.SetRow(addCard, 3);
+			mainLayout.Children.Add(addCard);
+
+			// 5. Футер с кнопкой "Сохранить и закрыть"
+			DockPanel footer = new DockPanel();
+			System.Windows.Controls.Button btnClose = new System.Windows.Controls.Button()
+			{
+				Content = "Сохранить и закрыть",
+				Height = 32,
+				Width = 170,
+				Background = new SolidColorBrush(Color.FromRgb(16, 185, 129)),
+				Foreground = Brushes.White,
+				FontWeight = FontWeights.Bold,
+				Cursor = System.Windows.Input.Cursors.Hand,
+				HorizontalAlignment = HorizontalAlignment.Right
+			};
+			btnClose.Click += (s, ev) =>
+			{
+				SyncAndSaveComputersToConfig();
+				RenderComputersList();
+				AppendTerminalLog(string.Format("{0} - Учетные данные сетевых компьютеров сохранены в config.json", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff")), Color.FromRgb(52, 211, 153));
+				window.Close();
+			};
+			DockPanel.SetDock(btnClose, System.Windows.Controls.Dock.Right);
+			footer.Children.Add(btnClose);
+
+			Grid.SetRow(footer, 4);
+			mainLayout.Children.Add(footer);
+
+			window.Content = mainLayout;
+			window.ShowDialog();
 		}
 
 		// Выбор и добавление директории сканирования через проводник Windows
@@ -1531,7 +2234,51 @@ namespace CertHarvester
 
 			ConfigManager.SaveConfig(_currentConfig);
 			AppendTerminalLog(string.Format("{0} - Параметры подключения к MSSQL сохранены в config.json", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff")), Color.FromRgb(52, 211, 153));
-			HcMessageBox.Show("Параметры базы данных успешно сохранены в config.json!", "Сохранение", MessageBoxButton.OK, MessageBoxImage.Information);
+			ShowAppMessage("Параметры базы данных успешно сохранены в config.json!", "Сохранение", MessageBoxImage.Information);
+		}
+
+		// Полная очистка таблицы в базе данных MSSQL и сброс текущего списка сертификатов
+		private void ButtonClearDbTable_Click(object sender, RoutedEventArgs e)
+		{
+			string server = _textSqlServer.Text.Trim();
+			string database = _textSqlDatabase.Text.Trim();
+			string table = string.IsNullOrWhiteSpace(_textSqlTable.Text) ? "Certificates" : _textSqlTable.Text.Trim();
+			string connString = string.Format("Server={0};Database={1};Integrated Security=True;", server, database);
+
+			bool confirm = ShowAppConfirm(
+				string.Format("Вы действительно хотите полностью очистить таблицу '{0}' в базе данных MSSQL?\n\nВсе существующие записи будут удалены для проведения чистого сканирования.", table),
+				"Подтверждение очистки таблицы БД",
+				"Да",
+				"Нет",
+				MessageBoxImage.Warning);
+
+			if (confirm == false)
+			{
+				return;
+			}
+
+			bool isSuccess = DatabaseManager.ClearTable(connString, table);
+			if (isSuccess == true)
+			{
+				_allCertificates.Clear();
+				if (_currentConfig.Certificates != null)
+				{
+					_currentConfig.Certificates.Clear();
+					ConfigManager.SaveConfig(_currentConfig);
+				}
+
+				_labelMetricInsertedNumber.Text = "0";
+				_labelMetricUpdatedNumber.Text = "0";
+				RefreshCertificatesGrid();
+
+				AppendTerminalLog(string.Format("{0} - Таблица '{1}' в базе данных MSSQL успешно полностью очищена. Готово к чистому сканированию", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), table), Color.FromRgb(52, 211, 153));
+				ShowAppMessage(string.Format("Таблица '{0}' успешно очищена!", table), "Очистка БД", MessageBoxImage.Information);
+			}
+			else
+			{
+				AppendTerminalLog(string.Format("{0} - Ошибка при очистке таблицы '{1}' в БД MSSQL", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), table), Color.FromRgb(248, 113, 113));
+				ShowAppMessage("Не удалось очистить таблицу в базе данных. Проверьте подключение к серверу MSSQL.", "Ошибка очистки", MessageBoxImage.Error);
+			}
 		}
 
 		// Запуск процедуры комплексного сканирования СКЗИ с обновлением интерфейса в реальном времени
@@ -1650,7 +2397,7 @@ namespace CertHarvester
 		{
 			if (_allCertificates == null || _allCertificates.Count == 0)
 			{
-				HcMessageBox.Show("Список сертификатов пуст. Сначала выполните сканирование.", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+				ShowAppMessage("Список сертификатов пуст. Сначала выполните сканирование.", "Информация", MessageBoxImage.Information);
 				return;
 			}
 
@@ -1664,6 +2411,7 @@ namespace CertHarvester
 			_labelMetricInsertedNumber.Text = savedCount.ToString();
 			AppendTerminalLog(string.Format("{0} - Синхронизация с БД завершена. Таблица '{1}': успешно обработано записей: {2}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), tableName, savedCount), Color.FromRgb(52, 211, 153));
 		}
+
 
 		// Добавление строки в цветной терминал журнала работы с автоматической прокруткой к концу
 		public void AppendTerminalLog(string message, Color color)
@@ -1682,6 +2430,233 @@ namespace CertHarvester
 
 			_textTerminalLog.Document.Blocks.Add(p);
 			_textTerminalLog.ScrollToEnd();
+		}
+
+		// Отображение диалогового окна с подтверждением действия (Да/Нет) в едином стиле приложения
+		private bool ShowAppConfirm(string message, string title, string okText = "Да", string cancelText = "Нет", MessageBoxImage image = MessageBoxImage.Warning)
+		{
+			if (!this.Dispatcher.CheckAccess())
+			{
+				return (bool)this.Dispatcher.Invoke(new Func<string, string, string, string, MessageBoxImage, bool>(ShowAppConfirm), message, title, okText, cancelText, image);
+			}
+
+			bool result = false;
+
+			HcWindow dialog = new HcWindow();
+			dialog.Title = title;
+			dialog.Width = 490;
+			dialog.SizeToContent = SizeToContent.Height;
+			dialog.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+			dialog.Owner = this;
+			dialog.ResizeMode = ResizeMode.NoResize;
+			dialog.ShowTitle = true;
+
+			bool isDark = _isDarkTheme;
+			SolidColorBrush windowBg = isDark ? new SolidColorBrush(Color.FromRgb(17, 24, 39)) : new SolidColorBrush(Color.FromRgb(244, 246, 249));
+			SolidColorBrush textPrimary = isDark ? new SolidColorBrush(Color.FromRgb(243, 244, 246)) : new SolidColorBrush(Color.FromRgb(17, 24, 39));
+
+			dialog.Background = windowBg;
+			dialog.NonClientAreaBackground = windowBg;
+			dialog.NonClientAreaForeground = textPrimary;
+
+			Grid rootGrid = new Grid() { Margin = new Thickness(22, 18, 22, 20) };
+			rootGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+			rootGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+
+			// Контент сообщения с иконкой
+			Grid contentGrid = new Grid();
+			contentGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = GridLength.Auto });
+			contentGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
+
+			TextBlock iconBlock = new TextBlock();
+			iconBlock.FontSize = 32;
+			iconBlock.VerticalAlignment = VerticalAlignment.Top;
+			iconBlock.Margin = new Thickness(0, 0, 16, 0);
+
+			if (image == MessageBoxImage.Warning)
+			{
+				iconBlock.Text = "⚠️";
+			}
+			else if (image == MessageBoxImage.Error)
+			{
+				iconBlock.Text = "❌";
+			}
+			else if (image == MessageBoxImage.Information)
+			{
+				iconBlock.Text = "ℹ️";
+			}
+			else
+			{
+				iconBlock.Text = "❓";
+			}
+
+			Grid.SetColumn(iconBlock, 0);
+			contentGrid.Children.Add(iconBlock);
+
+			TextBlock msgBlock = new TextBlock();
+			msgBlock.Text = message;
+			msgBlock.TextWrapping = TextWrapping.Wrap;
+			msgBlock.FontSize = 13;
+			msgBlock.LineHeight = 20;
+			msgBlock.Foreground = textPrimary;
+			msgBlock.VerticalAlignment = VerticalAlignment.Center;
+			Grid.SetColumn(msgBlock, 1);
+			contentGrid.Children.Add(msgBlock);
+
+			Grid.SetRow(contentGrid, 0);
+			rootGrid.Children.Add(contentGrid);
+
+			// Панель кнопок Да / Нет
+			StackPanel btnPanel = new StackPanel();
+			btnPanel.Orientation = System.Windows.Controls.Orientation.Horizontal;
+			btnPanel.HorizontalAlignment = System.Windows.HorizontalAlignment.Right;
+			btnPanel.Margin = new Thickness(0, 22, 0, 0);
+
+			Button btnConfirm = new Button();
+			btnConfirm.Content = okText;
+			btnConfirm.Height = 34;
+			btnConfirm.MinWidth = 90;
+			btnConfirm.Margin = new Thickness(0, 0, 10, 0);
+			btnConfirm.FontWeight = FontWeights.SemiBold;
+			btnConfirm.FontSize = 12;
+			btnConfirm.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+			btnConfirm.Foreground = Brushes.White;
+			btnConfirm.BorderThickness = new Thickness(0);
+			btnConfirm.Cursor = System.Windows.Input.Cursors.Hand;
+			HandyControl.Controls.BorderElement.SetCornerRadius(btnConfirm, new CornerRadius(6));
+			btnConfirm.Click += (s, e) =>
+			{
+				result = true;
+				dialog.Close();
+			};
+
+			Button btnCancel = new Button();
+			btnCancel.Content = cancelText;
+			btnCancel.Height = 34;
+			btnCancel.MinWidth = 90;
+			btnCancel.FontSize = 12;
+			btnCancel.Background = isDark ? new SolidColorBrush(Color.FromRgb(55, 65, 81)) : new SolidColorBrush(Color.FromRgb(226, 232, 240));
+			btnCancel.Foreground = textPrimary;
+			btnCancel.BorderThickness = new Thickness(0);
+			btnCancel.Cursor = System.Windows.Input.Cursors.Hand;
+			HandyControl.Controls.BorderElement.SetCornerRadius(btnCancel, new CornerRadius(6));
+			btnCancel.Click += (s, e) =>
+			{
+				result = false;
+				dialog.Close();
+			};
+
+			btnPanel.Children.Add(btnConfirm);
+			btnPanel.Children.Add(btnCancel);
+
+			Grid.SetRow(btnPanel, 1);
+			rootGrid.Children.Add(btnPanel);
+
+			dialog.Content = rootGrid;
+			dialog.ShowDialog();
+
+			return result;
+		}
+
+		// Отображение информационного диалогового окна с одной кнопкой 'ОК' в едином стиле приложения
+		private void ShowAppMessage(string message, string title, MessageBoxImage image = MessageBoxImage.Information)
+		{
+			if (!this.Dispatcher.CheckAccess())
+			{
+				this.Dispatcher.Invoke(new Action<string, string, MessageBoxImage>(ShowAppMessage), message, title, image);
+				return;
+			}
+
+			HcWindow dialog = new HcWindow();
+			dialog.Title = title;
+			dialog.Width = 460;
+			dialog.SizeToContent = SizeToContent.Height;
+			dialog.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+			dialog.Owner = this;
+			dialog.ResizeMode = ResizeMode.NoResize;
+			dialog.ShowTitle = true;
+
+			bool isDark = _isDarkTheme;
+			SolidColorBrush windowBg = isDark ? new SolidColorBrush(Color.FromRgb(17, 24, 39)) : new SolidColorBrush(Color.FromRgb(244, 246, 249));
+			SolidColorBrush textPrimary = isDark ? new SolidColorBrush(Color.FromRgb(243, 244, 246)) : new SolidColorBrush(Color.FromRgb(17, 24, 39));
+
+			dialog.Background = windowBg;
+			dialog.NonClientAreaBackground = windowBg;
+			dialog.NonClientAreaForeground = textPrimary;
+
+			Grid rootGrid = new Grid() { Margin = new Thickness(22, 18, 22, 20) };
+			rootGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+			rootGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+
+			// Контент сообщения с иконкой
+			Grid contentGrid = new Grid();
+			contentGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = GridLength.Auto });
+			contentGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
+
+			TextBlock iconBlock = new TextBlock();
+			iconBlock.FontSize = 32;
+			iconBlock.VerticalAlignment = VerticalAlignment.Top;
+			iconBlock.Margin = new Thickness(0, 0, 16, 0);
+
+			if (image == MessageBoxImage.Warning)
+			{
+				iconBlock.Text = "⚠️";
+			}
+			else if (image == MessageBoxImage.Error)
+			{
+				iconBlock.Text = "❌";
+			}
+			else if (image == MessageBoxImage.Question)
+			{
+				iconBlock.Text = "❓";
+			}
+			else
+			{
+				iconBlock.Text = "ℹ️";
+			}
+
+			Grid.SetColumn(iconBlock, 0);
+			contentGrid.Children.Add(iconBlock);
+
+			TextBlock msgBlock = new TextBlock();
+			msgBlock.Text = message;
+			msgBlock.TextWrapping = TextWrapping.Wrap;
+			msgBlock.FontSize = 13;
+			msgBlock.LineHeight = 20;
+			msgBlock.Foreground = textPrimary;
+			msgBlock.VerticalAlignment = VerticalAlignment.Center;
+			Grid.SetColumn(msgBlock, 1);
+			contentGrid.Children.Add(msgBlock);
+
+			Grid.SetRow(contentGrid, 0);
+			rootGrid.Children.Add(contentGrid);
+
+			// Панель с кнопкой ОК
+			StackPanel btnPanel = new StackPanel();
+			btnPanel.Orientation = System.Windows.Controls.Orientation.Horizontal;
+			btnPanel.HorizontalAlignment = System.Windows.HorizontalAlignment.Right;
+			btnPanel.Margin = new Thickness(0, 22, 0, 0);
+
+			Button btnOk = new Button();
+			btnOk.Content = "ОК";
+			btnOk.Height = 34;
+			btnOk.MinWidth = 90;
+			btnOk.FontWeight = FontWeights.SemiBold;
+			btnOk.FontSize = 12;
+			btnOk.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+			btnOk.Foreground = Brushes.White;
+			btnOk.BorderThickness = new Thickness(0);
+			btnOk.Cursor = System.Windows.Input.Cursors.Hand;
+			HandyControl.Controls.BorderElement.SetCornerRadius(btnOk, new CornerRadius(6));
+			btnOk.Click += (s, e) => dialog.Close();
+
+			btnPanel.Children.Add(btnOk);
+
+			Grid.SetRow(btnPanel, 1);
+			rootGrid.Children.Add(btnPanel);
+
+			dialog.Content = rootGrid;
+			dialog.ShowDialog();
 		}
 	}
 }

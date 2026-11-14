@@ -30,6 +30,52 @@ namespace CertHarvester
 			}
 		}
 
+		// Полная очистка таблицы сертификатов в базе данных MSSQL (TRUNCATE или DELETE)
+		public static bool ClearTable(string connectionString, string tableName = "Certificates")
+		{
+			try
+			{
+				if (string.IsNullOrWhiteSpace(connectionString) || string.IsNullOrWhiteSpace(tableName))
+				{
+					return false;
+				}
+
+				EnsureDatabaseExists(connectionString);
+
+				using (SqlConnection connection = new SqlConnection(connectionString))
+				{
+					connection.Open();
+					EnsureTableExists(connection, tableName);
+
+					string truncateQuery = "TRUNCATE TABLE [dbo].[" + tableName + "]";
+					try
+					{
+						using (SqlCommand truncateCmd = new SqlCommand(truncateQuery, connection))
+						{
+							truncateCmd.ExecuteNonQuery();
+						}
+					}
+					catch
+					{
+						// Если TRUNCATE заблокирован внешними ключами или правами, используем DELETE
+						string deleteQuery = "DELETE FROM [dbo].[" + tableName + "]";
+						using (SqlCommand deleteCmd = new SqlCommand(deleteQuery, connection))
+						{
+							deleteCmd.ExecuteNonQuery();
+						}
+					}
+
+					Logger.LogInfo("Таблица '" + tableName + "' в базе данных MSSQL успешно полностью очищена");
+					return true;
+				}
+			}
+			catch (Exception ex)
+			{
+				Logger.LogError("Ошибка при очистке таблицы '" + tableName + "' в БД MSSQL: " + ex.Message, ex);
+				return false;
+			}
+		}
+
 		// Автоматическая проверка существования целевой базы данных на сервере MSSQL и ее создание при отсутствии
 		public static void EnsureDatabaseExists(string connectionString)
 		{

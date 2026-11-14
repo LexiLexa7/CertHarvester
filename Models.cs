@@ -91,6 +91,57 @@ namespace CertHarvester
 	}
 
 	/// <summary>
+	/// Модель учетных данных для авторизованного сетевого подключения к удаленному компьютеру (net use)
+	/// </summary>
+	public class NetworkComputerCredential
+	{
+		/// <summary>
+		/// Имя или IP-адрес сетевого компьютера
+		/// </summary>
+		public string ComputerAddress { get; set; }
+
+		/// <summary>
+		/// Имя пользователя (логин) для подключения
+		/// </summary>
+		public string Username { get; set; }
+
+		/// <summary>
+		/// Пароль учетной записи пользователя
+		/// </summary>
+		public string Password { get; set; }
+
+		/// <summary>
+		/// Признак активного подключения по сетевой сессии net use
+		/// </summary>
+		public bool IsConnected { get; set; }
+
+		/// <summary>
+		/// Список дополнительных директорий на данном компьютере для поиска сертификатов
+		/// </summary>
+		public List<string> CustomDirectories { get; set; }
+
+		// Конструктор по умолчанию для инициализации полей
+		public NetworkComputerCredential()
+		{
+			ComputerAddress = string.Empty;
+			Username = string.Empty;
+			Password = string.Empty;
+			IsConnected = false;
+			CustomDirectories = new List<string>();
+		}
+
+		// Параметризованный конструктор для создания записи учетных данных
+		public NetworkComputerCredential(string computerAddress, string username, string password)
+		{
+			ComputerAddress = computerAddress;
+			Username = username;
+			Password = password;
+			IsConnected = false;
+			CustomDirectories = new List<string>();
+		}
+	}
+
+	/// <summary>
 	/// Модель конфигурационных параметров приложения CertHarvester
 	/// </summary>
 	public class AppConfig
@@ -104,6 +155,11 @@ namespace CertHarvester
 		/// Список имен или IP-адресов ПК в локальной сети для сетевого сканирования
 		/// </summary>
 		public List<string> NetworkComputers { get; set; }
+
+		/// <summary>
+		/// Список сохраненных учетных данных для подключения к компьютерам сети (net use)
+		/// </summary>
+		public List<NetworkComputerCredential> ComputerCredentials { get; set; }
 
 		/// <summary>
 		/// Строка подключения к базе данных Microsoft SQL Server 2019
@@ -135,6 +191,7 @@ namespace CertHarvester
 		{
 			ScanDirectories = new List<string>();
 			NetworkComputers = new List<string>();
+			ComputerCredentials = new List<NetworkComputerCredential>();
 			ConnectionString = "Server=localhost;Database=CertHarvesterDB;Integrated Security=True;";
 			TableName = "Certificates";
 			AutoCreateTable = true;

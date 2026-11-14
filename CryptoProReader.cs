@@ -247,10 +247,40 @@ namespace CertHarvester
 			return false;
 		}
 
-		// Проверка расширений сертификата на прямое наличие встроенной лицензии КриптоПро CSP
+		// Проверка расширений сертификата на строгое наличие OID встроенной лицензии КриптоПро CSP (1.2.643.2.2.49.2 и ветка 1.2.643.2.2.49.*)
 		public static bool CheckEmbeddedLicense(X509Certificate2 certificate, out string licenseVersionInfo)
 		{
-			return IsCryptoProCertificate(certificate, out licenseVersionInfo);
+			licenseVersionInfo = string.Empty;
+			if (certificate == null || certificate.Extensions == null)
+			{
+				return false;
+			}
+
+			for (int i = 0; i < certificate.Extensions.Count; i++)
+			{
+				X509Extension extension = certificate.Extensions[i];
+				if (extension != null && extension.Oid != null)
+				{
+					string oid = extension.Oid.Value ?? string.Empty;
+					string friendly = extension.Oid.FriendlyName ?? string.Empty;
+
+					if (string.Equals(oid, CryptoProLicenseOid, StringComparison.OrdinalIgnoreCase) ||
+					    oid.StartsWith(CryptoProLicenseOidBranch, StringComparison.OrdinalIgnoreCase))
+					{
+						licenseVersionInfo = ParseLicenseExtensionData(extension);
+						return true;
+					}
+
+					if (friendly.IndexOf("лицензи", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					    friendly.IndexOf("license", StringComparison.OrdinalIgnoreCase) >= 0)
+					{
+						licenseVersionInfo = ParseLicenseExtensionData(extension);
+						return true;
+					}
+				}
+			}
+
+			return false;
 		}
 
 		// Проверка расширений сертификата на явный OID встроенной лицензии КриптоПро CSP

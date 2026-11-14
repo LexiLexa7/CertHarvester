@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace CertHarvester
@@ -9,10 +10,74 @@ namespace CertHarvester
 	/// </summary>
 	public static class Program
 	{
+		private const int STD_OUTPUT_HANDLE = -11;
+
+		[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+		internal struct CONSOLE_FONT_INFO_EX
+		{
+			public uint cbSize;
+			public uint nFont;
+			public short dwFontSizeX;
+			public short dwFontSizeY;
+			public int FontFamily;
+			public int FontWeight;
+			[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+			public string FaceName;
+		}
+
+		[DllImport("kernel32.dll", SetLastError = true)]
+		private static extern bool SetConsoleOutputCP(uint wCodePageID);
+
+		[DllImport("kernel32.dll", SetLastError = true)]
+		private static extern bool SetConsoleCP(uint wCodePageID);
+
+		[DllImport("kernel32.dll", SetLastError = true)]
+		private static extern IntPtr GetStdHandle(int nStdHandle);
+
+		[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+		private static extern bool SetCurrentConsoleFontEx(IntPtr hConsoleOutput, bool bMaximumWindow, ref CONSOLE_FONT_INFO_EX lpConsoleCurrentFontEx);
+
+		// Настройка кодировки консоли и Unicode-шрифта для корректного отображения кириллицы на всех версиях Windows
+		private static void ConfigureConsoleEncoding()
+		{
+			try
+			{
+				SetConsoleOutputCP(65001);
+				SetConsoleCP(65001);
+				Console.OutputEncoding = System.Text.Encoding.UTF8;
+				Console.InputEncoding = System.Text.Encoding.UTF8;
+
+				IntPtr stdOutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+				if (stdOutHandle != IntPtr.Zero && stdOutHandle != new IntPtr(-1))
+				{
+					CONSOLE_FONT_INFO_EX fontInfo = new CONSOLE_FONT_INFO_EX();
+					fontInfo.cbSize = (uint)Marshal.SizeOf(typeof(CONSOLE_FONT_INFO_EX));
+					fontInfo.FontFamily = 54;
+					fontInfo.FontWeight = 400;
+					fontInfo.FaceName = "Consolas";
+					fontInfo.dwFontSizeY = 16;
+					SetCurrentConsoleFontEx(stdOutHandle, false, ref fontInfo);
+				}
+			}
+			catch
+			{
+				try
+				{
+					SetConsoleOutputCP(1251);
+					SetConsoleCP(1251);
+					Console.OutputEncoding = System.Text.Encoding.GetEncoding(1251);
+					Console.InputEncoding = System.Text.Encoding.GetEncoding(1251);
+				}
+				catch { }
+			}
+		}
+
 		// Точка входа в программу с маршрутизацией режимов работы по аргументам командной строки
 		[STAThread]
 		public static int Main(string[] args)
 		{
+			ConfigureConsoleEncoding();
+
 			try
 			{
 				// Логирование старта работы приложения строго по образцу из задания
@@ -40,6 +105,7 @@ namespace CertHarvester
 							Logger.LogInfo("Выход из приложения после закрытия графического интерфейса");
 							return 0;
 						}
+
 					}
 				}
 
