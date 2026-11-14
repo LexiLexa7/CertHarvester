@@ -1291,21 +1291,48 @@ namespace CertHarvester
 				Console.ResetColor();
 				Console.WriteLine(" Пользователь: " + Environment.UserName + " | Рабочая станция: " + Environment.MachineName);
 				Console.WriteLine("----------------------------------------------------------------------");
-				Console.WriteLine(" 1. Запустить полное сканирование и парсинг сертификатов");
+				Console.WriteLine(" 1. Консольное управление");
 				Console.WriteLine(" 2. Открыть графическую панель управления (WPF)");
-				Console.WriteLine(" 3. Показать справку по флагам командной строки (-help)");
-				Console.WriteLine(" 4. Выход из программы");
+				Console.WriteLine(" 3. Выход из программы");
 				Console.WriteLine("----------------------------------------------------------------------");
-				Console.Write(" Выберите пункт меню (1-4): ");
+				Console.Write(" Выберите пункт меню (1-3): ");
 
 				string userInput = Console.ReadLine();
 				Console.WriteLine();
 
 				if (userInput == "1")
 				{
-					Logger.LogInfo("Пользователем выбран пункт меню 1: Консольное сканирование");
-					AppConfig config = ConfigManager.LoadConfig();
-					ExecuteScan(config, false, null, null, null, null);
+					Logger.LogInfo("Пользователем выбран пункт меню 1: Консольное управление");
+					Console.WriteLine();
+					Console.ForegroundColor = ConsoleColor.Cyan;
+					Console.WriteLine("======================================================================");
+					Console.WriteLine("        Добро пожаловать в консольное управление CertHarvester!       ");
+					Console.WriteLine("======================================================================");
+					Console.ResetColor();
+					Console.WriteLine(" Программа поддерживает запуск с флагами командной строки.");
+					Console.WriteLine(" Для вызова полной справки со всеми командами используйте флаг: -help");
+					Console.ForegroundColor = ConsoleColor.Yellow;
+					Console.WriteLine("   Пример: CertHarvester.exe -help");
+					Console.ResetColor();
+					Console.WriteLine(" Доступные команды: -scan, -target, -dir, -discover, -ping, -db-test и др.");
+					Console.WriteLine("----------------------------------------------------------------------");
+					Console.WriteLine(" Нажмите [Enter] для запуска полного сканирования");
+					Console.WriteLine(" или введите флаги (например: -help, -discover, -ping 127.0.0.1):");
+					Console.Write(" Команда > ");
+
+					string consoleInput = Console.ReadLine();
+					Console.WriteLine();
+
+					if (string.IsNullOrWhiteSpace(consoleInput))
+					{
+						AppConfig config = ConfigManager.LoadConfig();
+						ExecuteScan(config, false, null, null, null, null);
+					}
+					else
+					{
+						string[] customArgs = SplitCommandLine(consoleInput);
+						ParseAndExecuteCommandLine(customArgs);
+					}
 				}
 				else if (userInput == "2")
 				{
@@ -1314,20 +1341,57 @@ namespace CertHarvester
 				}
 				else if (userInput == "3")
 				{
-					PrintHelp();
-				}
-				else if (userInput == "4")
-				{
-					Logger.LogInfo("Пользователем выбран пункт меню 4: Выход");
+					Logger.LogInfo("Пользователем выбран пункт меню 3: Выход");
 					isApplicationRunning = false;
 				}
 				else
 				{
 					Console.ForegroundColor = ConsoleColor.Yellow;
-					Console.WriteLine("Некорректный ввод. Пожалуйста, введите цифру от 1 до 4.");
+					Console.WriteLine("Некорректный ввод. Пожалуйста, введите цифру 1, 2 или 3.");
 					Console.ResetColor();
 				}
 			}
+		}
+
+		// Разделение строки консольных команд на массив аргументов с учетом кавычек
+		private static string[] SplitCommandLine(string commandLine)
+		{
+			if (string.IsNullOrWhiteSpace(commandLine))
+			{
+				return new string[0];
+			}
+
+			List<string> parts = new List<string>();
+			StringBuilder current = new StringBuilder();
+			bool inQuotes = false;
+
+			for (int i = 0; i < commandLine.Length; i++)
+			{
+				char c = commandLine[i];
+				if (c == '\"')
+				{
+					inQuotes = !inQuotes;
+				}
+				else if (char.IsWhiteSpace(c) && !inQuotes)
+				{
+					if (current.Length > 0)
+					{
+						parts.Add(current.ToString());
+						current.Clear();
+					}
+				}
+				else
+				{
+					current.Append(c);
+				}
+			}
+
+			if (current.Length > 0)
+			{
+				parts.Add(current.ToString());
+			}
+
+			return parts.ToArray();
 		}
 
 		// Выполнение полного цикла консольного сканирования сертификатов и сохранения данных в СУБД MSSQL
