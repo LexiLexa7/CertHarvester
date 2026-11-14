@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Management;
 using System.Net.NetworkInformation;
+using System.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.ServiceProcess;
@@ -237,64 +238,194 @@ namespace CertHarvester
 					}
 				}
 			}
+			catch (UnauthorizedAccessException)
+			{
+				// Тихо пропускаем защищенные каталоги Windows
+			}
 			catch (Exception ex)
 			{
-				Logger.LogError("Ошибка обхода каталога системных сертификатов " + directoryPath + ": " + ex.Message, ex);
+				Logger.LogWarning("Каталог системных сертификатов " + directoryPath + " недоступен: " + ex.Message);
+			}
+		}
+
+		// Проверка, следует ли пропустить данный каталог (контейнеры виртуализации, корзина, точки монтирования NTFS)
+		private static bool ShouldSkipDirectory(string dirPath)
+		{
+			if (string.IsNullOrWhiteSpace(dirPath))
+			{
+				return true;
+			}
+
+			try
+			{
+				// Пропуск путей длиннее 248 символов (ограничение стандартного API Windows Directory)
+				if (dirPath.Length >= 248)
+				{
+					return true;
+				}
+
+				// Пропуск служебных папок контейнеров, виртуализации, корзины и системных служебных каталогов
+				if (dirPath.IndexOf(@"\Containers\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					dirPath.IndexOf(@"\$Recycle.Bin", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					dirPath.IndexOf(@"\System Volume Information", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					dirPath.IndexOf(@"\Recovery\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					dirPath.IndexOf(@"\Windows\SystemTemp", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					dirPath.IndexOf(@"\Windows\WinSxS", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					dirPath.IndexOf(@"\Windows\System32\Tasks", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					dirPath.IndexOf(@"\Windows\System32\WDI", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					dirPath.IndexOf(@"\Windows\CSC", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					dirPath.IndexOf(@"\Windows\servicing", StringComparison.OrdinalIgnoreCase) >= 0)
+				{
+					return true;
+				}
+
+				DirectoryInfo dirInfo = new DirectoryInfo(dirPath);
+				if (!dirInfo.Exists)
+				{
+					return true;
+				}
+
+				// Пропуск точек повторной обработки NTFS (Junction Points / Symlinks),
+				// чтобы исключить зацикливание рекурсии и обход изолированных виртуальных слоев
+				if ((dirInfo.Attributes & FileAttributes.ReparsePoint) != 0)
+				{
+					return true;
+				}
+
+				return false;
+			}
+			catch
+			{
+				// Если даже атрибуты каталога невозможно прочесть — пропускаем
+				return true;
 			}
 		}
 
 		// Рекурсивный поиск файлов сертификатов в заданной локальной или сетевой директории
 		public static void ScanDirectoryRecursive(string targetDirectory, string computerName, List<CertificateRecord> records)
 		{
+			if (string.IsNullOrWhiteSpace(targetDirectory))
+			{
+				return;
+			}
+
+			if (ShouldSkipDirectory(targetDirectory))
+			{
+				return;
+			}
+
 			try
 			{
-				if (!Directory.Exists(targetDirectory))
+				// 1. Поиск файлов сертификатов в текущей директории
+				string[] files = null;
+				try
 				{
-					Logger.LogWarning("Директория не найдена или недоступна: " + targetDirectory);
+					files = Directory.GetFiles(targetDirectory);
+				}
+				catch (UnauthorizedAccessException)
+				{
+					// Каталог защищен правами доступа Windows — тихо пропускаем без спама в консоль
+					return;
+				}
+				catch (PathTooLongException)
+				{
+					// Превышение допустимой длины пути Windows — тихо пропускаем
+					return;
+				}
+				catch (DirectoryNotFoundException)
+				{
+					return;
+				}
+				catch (SecurityException)
+				{
+					return;
+				}
+				catch
+				{
 					return;
 				}
 
-				// Поиск файлов сертификатов с расширениями .cer и .crt
-				string[] files = Directory.GetFiles(targetDirectory);
-				for (int fileIndex = 0; fileIndex < files.Length; fileIndex++)
+				if (files != null && files.Length > 0)
 				{
-					string currentFilePath = files[fileIndex];
-					string fileExtension = Path.GetExtension(currentFilePath);
-
-					if (IsCertificateExtension(fileExtension))
+					for (int fileIndex = 0; fileIndex < files.Length; fileIndex++)
 					{
-						CertificateRecord parsedRecord = ParseCertificateFile(currentFilePath, computerName);
-						if (parsedRecord != null)
+						string currentFilePath = files[fileIndex];
+						try
 						{
-							AddOrUpdateRecord(records, parsedRecord);
-							Logger.LogInfo("Успешно распарсен файл сертификата: " + parsedRecord.SerialNumber + " (" + parsedRecord.OwnerName + ")");
+							string fileExtension = Path.GetExtension(currentFilePath);
+							if (IsCertificateExtension(fileExtension))
+							{
+								CertificateRecord parsedRecord = ParseCertificateFile(currentFilePath, computerName);
+								if (parsedRecord != null)
+								{
+									AddOrUpdateRecord(records, parsedRecord);
+									Logger.LogInfo("Успешно распарсен файл сертификата: " + parsedRecord.SerialNumber + " (" + parsedRecord.OwnerName + ")");
+								}
+							}
+						}
+						catch
+						{
+							// Пропуск недоступного или поврежденного файла
 						}
 					}
 				}
 
-				// Рекурсивный обход всех вложенных поддиректорий
-				string[] subDirectories = Directory.GetDirectories(targetDirectory);
-				for (int dirIndex = 0; dirIndex < subDirectories.Length; dirIndex++)
+				// 2. Рекурсивный обход всех вложенных поддиректорий
+				string[] subDirectories = null;
+				try
 				{
-					string subDir = subDirectories[dirIndex];
-					ScanDirectoryRecursive(subDir, computerName, records);
+					subDirectories = Directory.GetDirectories(targetDirectory);
+				}
+				catch (UnauthorizedAccessException)
+				{
+					// Ограничение прав на перечисление вложенных каталогов — тихо завершаем ветку
+					return;
+				}
+				catch (PathTooLongException)
+				{
+					return;
+				}
+				catch (DirectoryNotFoundException)
+				{
+					return;
+				}
+				catch (SecurityException)
+				{
+					return;
+				}
+				catch
+				{
+					return;
+				}
+
+				if (subDirectories != null && subDirectories.Length > 0)
+				{
+					for (int dirIndex = 0; dirIndex < subDirectories.Length; dirIndex++)
+					{
+						string subDir = subDirectories[dirIndex];
+						if (!ShouldSkipDirectory(subDir))
+						{
+							ScanDirectoryRecursive(subDir, computerName, records);
+						}
+					}
 				}
 			}
-			catch (UnauthorizedAccessException authEx)
+			catch (UnauthorizedAccessException)
 			{
-				Logger.LogError("Отказано в доступе к каталогу " + targetDirectory + ": " + authEx.Message, authEx);
+				// Верхнеуровневый перехват ограничений прав — полный отказ от спама в консоль
 			}
-			catch (PathTooLongException pathEx)
+			catch (PathTooLongException)
 			{
-				Logger.LogError("Слишком длинный путь каталога " + targetDirectory + ": " + pathEx.Message, pathEx);
 			}
-			catch (DirectoryNotFoundException notFoundEx)
+			catch (DirectoryNotFoundException)
 			{
-				Logger.LogWarning("Каталог не найден при сканировании " + targetDirectory + ": " + notFoundEx.Message);
+			}
+			catch (SecurityException)
+			{
 			}
 			catch (Exception ex)
 			{
-				Logger.LogError("Непредвиденная ошибка при сканировании директории " + targetDirectory + ": " + ex.Message, ex);
+				Logger.LogWarning("Предупреждение при обходе каталога " + targetDirectory + ": " + ex.Message);
 			}
 		}
 
@@ -1562,6 +1693,10 @@ namespace CertHarvester
 					for (int u = 0; u < userDirs.Length; u++)
 					{
 						string userProfile = userDirs[u];
+						if (ShouldSkipDirectory(userProfile))
+						{
+							continue;
+						}
 						string userName = Path.GetFileName(userProfile);
 						string userStore = Path.Combine(userProfile, @"AppData\Roaming\Microsoft\SystemCertificates\My\Certificates");
 						if (Directory.Exists(userStore))
@@ -1696,6 +1831,13 @@ namespace CertHarvester
 						Logger.LogWarning("Не удалось скопировать файл сертификата " + remoteFilePath + ": " + copyEx.Message);
 					}
 				}
+			}
+			catch (UnauthorizedAccessException)
+			{
+				// Тихо пропускаем каталог при отсутствии прав
+			}
+			catch (PathTooLongException)
+			{
 			}
 			catch (Exception ex)
 			{

@@ -38,7 +38,21 @@ namespace CertHarvester
 		public long PingTimeMs { get; set; }
 		public string PingDisplay { get { return PingTimeMs <= 1 ? "< 1 мс" : string.Format("{0} мс", PingTimeMs); } }
 		public string StatusText { get; set; }
-		public string DeviceTypeIcon { get { return IsWindows ? "💻" : "📱"; } }
+		public string DeviceTypeIcon { get { return IsWindows ? "ПК" : "Узел"; } }
+
+		/// <summary>
+		/// Векторная иконка устройства Lucide (monitor для Windows, smartphone для остальных)
+		/// </summary>
+		public System.Windows.Media.ImageSource DeviceTypeImage
+		{
+			get
+			{
+				return LucideIcons.CreateImageSource(
+					IsWindows ? "monitor" : "smartphone",
+					14,
+					IsWindows ? System.Drawing.Color.FromArgb(96, 165, 250) : System.Drawing.Color.FromArgb(245, 158, 11));
+			}
+		}
 
 		public Brush StatusBrush
 		{
