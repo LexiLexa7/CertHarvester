@@ -334,6 +334,7 @@ namespace CertHarvester
 			_buttonManageDevices = new System.Windows.Controls.Button();
 			_buttonManageDevices.Content = "⚙️  Управление устройствами";
 			_buttonManageDevices.Height = 32;
+			_buttonManageDevices.HorizontalAlignment = HorizontalAlignment.Stretch;
 			_buttonManageDevices.Margin = new Thickness(0, 0, 0, 8);
 			_buttonManageDevices.Cursor = System.Windows.Input.Cursors.Hand;
 			_buttonManageDevices.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
@@ -409,8 +410,10 @@ namespace CertHarvester
 			_buttonSaveDbSettings = new System.Windows.Controls.Button();
 			_buttonSaveDbSettings.Content = "Сохранить параметры БД";
 			_buttonSaveDbSettings.Height = 30;
+			_buttonSaveDbSettings.HorizontalAlignment = HorizontalAlignment.Stretch;
 			_buttonSaveDbSettings.Cursor = System.Windows.Input.Cursors.Hand;
 			_buttonSaveDbSettings.FontWeight = FontWeights.SemiBold;
+			HandyControl.Controls.BorderElement.SetCornerRadius(_buttonSaveDbSettings, new CornerRadius(5));
 			_buttonSaveDbSettings.Click += ButtonSaveDbSettings_Click;
 			dbBlock.Children.Add(_buttonSaveDbSettings);
 
@@ -418,9 +421,11 @@ namespace CertHarvester
 			_buttonLoadFromDb = new System.Windows.Controls.Button();
 			_buttonLoadFromDb.Content = "📥   Загрузить данные из БД";
 			_buttonLoadFromDb.Height = 30;
+			_buttonLoadFromDb.HorizontalAlignment = HorizontalAlignment.Stretch;
 			_buttonLoadFromDb.Margin = new Thickness(0, 6, 0, 0);
 			_buttonLoadFromDb.Cursor = System.Windows.Input.Cursors.Hand;
 			_buttonLoadFromDb.FontWeight = FontWeights.SemiBold;
+			HandyControl.Controls.BorderElement.SetCornerRadius(_buttonLoadFromDb, new CornerRadius(5));
 			_buttonLoadFromDb.Click += ButtonLoadFromDb_Click;
 			dbBlock.Children.Add(_buttonLoadFromDb);
 
@@ -428,11 +433,13 @@ namespace CertHarvester
 			_buttonClearDbTable = new System.Windows.Controls.Button();
 			_buttonClearDbTable.Content = "🗑   Очистить таблицу в БД";
 			_buttonClearDbTable.Height = 30;
+			_buttonClearDbTable.HorizontalAlignment = HorizontalAlignment.Stretch;
 			_buttonClearDbTable.Margin = new Thickness(0, 6, 0, 0);
 			_buttonClearDbTable.Cursor = System.Windows.Input.Cursors.Hand;
 			_buttonClearDbTable.Background = new SolidColorBrush(Color.FromRgb(185, 28, 28));
 			_buttonClearDbTable.Foreground = Brushes.White;
 			_buttonClearDbTable.FontWeight = FontWeights.SemiBold;
+			HandyControl.Controls.BorderElement.SetCornerRadius(_buttonClearDbTable, new CornerRadius(5));
 			_buttonClearDbTable.Click += ButtonClearDbTable_Click;
 			dbBlock.Children.Add(_buttonClearDbTable);
 
