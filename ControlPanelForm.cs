@@ -32,12 +32,13 @@ namespace CertHarvester
 		public string Password { get; set; }
 		public bool IsConnected { get; set; }
 		public List<string> CustomDirectories { get; set; }
+		public string SearchMode { get; set; } // "All", "Standard", "Custom"
 		public bool? IsOnline { get; set; }
 		public long? PingTimeMs { get; set; }
 		public bool? IsSmbOpen { get; set; }
 
 		// Конструктор модели сетевого узла с поддержкой учетных данных и индивидуальных директорий
-		public NetworkNodeItem(string name, string ipAddress, string status, string username = "", string password = "", List<string> customDirectories = null)
+		public NetworkNodeItem(string name, string ipAddress, string status, string username = "", string password = "", List<string> customDirectories = null, string searchMode = "All")
 		{
 			Name = name;
 			IpAddress = ipAddress;
@@ -46,6 +47,7 @@ namespace CertHarvester
 			Password = password;
 			IsConnected = false;
 			CustomDirectories = customDirectories ?? new List<string>();
+			SearchMode = string.IsNullOrEmpty(searchMode) ? "All" : searchMode;
 			IsOnline = null;
 			PingTimeMs = null;
 			IsSmbOpen = null;
@@ -535,6 +537,33 @@ namespace CertHarvester
 		private TextBlock _labelTerminalTitle;
 		private System.Windows.Controls.RichTextBox _textTerminalLog;
 
+		// Элементы управления компоновкой (сплиттер и кнопки в шапке окна в стиле VS Code)
+		private ColumnDefinition _rootColSidebar;
+		private ColumnDefinition _rootColGap;
+		private Grid _mainContentGrid;
+		private RowDefinition _rowDefDataGrid;
+		private RowDefinition _rowDefSplitter;
+		private RowDefinition _rowDefTerminal;
+		private GridSplitter _gridSplitter;
+		private Brush _splitterNormalBrush;
+		private double _terminalLastHeight = 170;
+		private double _currentDragHeight = 170;
+		private bool _isDragSnappedToClose = false;
+		private const double MinConsoleVisibleHeight = 70.0;
+		private const double SnapToMinThreshold = 85.0;
+		private const double SnapCloseThreshold = 40.0;
+		private const double TerminalLineHeight = 16.0;
+		private int _terminalMouseWheelAccumulator = 0;
+		private bool _isTerminalSnappingScroll = false;
+		private bool _isSidebarVisible = true;
+		private bool _isBottomPanelVisible = true;
+		private System.Windows.Controls.Button _buttonToggleSidebar;
+		private System.Windows.Controls.Button _buttonToggleBottomPanel;
+		private Border _iconSidebarOuter;
+		private Border _iconSidebarLeft;
+		private Border _iconBottomOuter;
+		private Border _iconBottomPart;
+
 		// Конструктор инициализации окна управления
 		public ControlPanelForm()
 		{
@@ -596,6 +625,32 @@ namespace CertHarvester
 		private void InitializeComponentCustom()
 		{
 			this.Title = "Сбор данных о СКЗИ";
+			try
+			{
+				string iconPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.ico");
+				if (System.IO.File.Exists(iconPath))
+				{
+					this.Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(iconPath, UriKind.Absolute));
+				}
+				else
+				{
+					string exePath = System.Reflection.Assembly.GetEntryAssembly() != null ? System.Reflection.Assembly.GetEntryAssembly().Location : null;
+					if (!string.IsNullOrEmpty(exePath) && System.IO.File.Exists(exePath))
+					{
+						using (System.Drawing.Icon appIcon = System.Drawing.Icon.ExtractAssociatedIcon(exePath))
+						{
+							if (appIcon != null)
+							{
+								this.Icon = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
+									appIcon.Handle,
+									Int32Rect.Empty,
+									System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
+							}
+						}
+					}
+				}
+			}
+			catch { }
 			this.Width = 1260;
 			this.Height = 820;
 			this.MinWidth = 1000;
@@ -605,12 +660,15 @@ namespace CertHarvester
 			this.FontFamily = new FontFamily("Segoe UI");
 			this.FontSize = 13;
 
-			// Главная сетка: левая колонка (280px) и правая рабочая область (*)
+			// Главная сетка: левая колонка (295px) и правая рабочая область (*)
 			Grid rootGrid = new Grid();
 			rootGrid.Margin = new Thickness(14, 8, 14, 14);
-			rootGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(295) });
-			rootGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(14) });
-			rootGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) });
+			_rootColSidebar = new ColumnDefinition() { Width = new GridLength(295) };
+			_rootColGap = new ColumnDefinition() { Width = new GridLength(14) };
+			ColumnDefinition rootColMain = new ColumnDefinition() { Width = new GridLength(1, GridUnitType.Star) };
+			rootGrid.ColumnDefinitions.Add(_rootColSidebar);
+			rootGrid.ColumnDefinitions.Add(_rootColGap);
+			rootGrid.ColumnDefinitions.Add(rootColMain);
 
 			// 1. Левый сайдбар
 			Border sidebar = CreateLeftSidebar();
@@ -623,6 +681,9 @@ namespace CertHarvester
 			rootGrid.Children.Add(mainArea);
 
 			this.Content = rootGrid;
+
+			// Кнопки управления отображением панелей в шапке окна в стиле VS Code
+			InitializeTitleBarLayoutControls();
 		}
 
 		// Создание левого сайдбара с настройками ресурсов и подключения к СУБД
@@ -786,12 +847,16 @@ namespace CertHarvester
 		// Создание правой основной области с заголовком, карточками показателей, таблицей и терминалом
 		private Grid CreateMainContentArea()
 		{
-			Grid mainGrid = new Grid();
-			mainGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto }); // 0: Заголовок и кнопки
-			mainGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto }); // 1: Карточки метрик (KPI)
-			mainGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto }); // 2: Поиск и фильтр
-			mainGrid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(1, GridUnitType.Star) }); // 3: DataGrid
-			mainGrid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(170) }); // 4: Терминал журнала работы
+			_mainContentGrid = new Grid();
+			_mainContentGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto }); // 0: Заголовок и кнопки
+			_mainContentGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto }); // 1: Карточки метрик (KPI)
+			_mainContentGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto }); // 2: Поиск и фильтр
+			_rowDefDataGrid = new RowDefinition() { Height = new GridLength(1, GridUnitType.Star), MinHeight = 80 };
+			_rowDefSplitter = new RowDefinition() { Height = new GridLength(8) };
+			_rowDefTerminal = new RowDefinition() { Height = new GridLength(170) };
+			_mainContentGrid.RowDefinitions.Add(_rowDefDataGrid); // 3: DataGrid
+			_mainContentGrid.RowDefinitions.Add(_rowDefSplitter); // 4: Сплиттер (разделитель с возможностью перетаскивания)
+			_mainContentGrid.RowDefinitions.Add(_rowDefTerminal); // 5: Терминал журнала работы
 
 			// Строка 0: Заголовок "Сертификаты" и кнопки управления действиями
 			DockPanel headerDock = new DockPanel();
@@ -817,8 +882,9 @@ namespace CertHarvester
 			_buttonStartScan.Padding = new Thickness(18, 0, 18, 0);
 			_buttonStartScan.Cursor = System.Windows.Input.Cursors.Hand;
 			_buttonStartScan.Foreground = Brushes.White;
-			_buttonStartScan.Background = new SolidColorBrush(Color.FromRgb(2, 132, 199));
+			_buttonStartScan.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
 			_buttonStartScan.FontWeight = FontWeights.Bold;
+			HandyControl.Controls.BorderElement.SetCornerRadius(_buttonStartScan, new CornerRadius(5));
 			LucideIcons.ApplyToButton(_buttonStartScan, "play", "Сканировать", 15, Brushes.White, Brushes.White, 8, FontWeights.Bold);
 			_buttonStartScan.Click += ButtonStartScan_Click;
 			actionButtons.Children.Add(_buttonStartScan);
@@ -827,32 +893,38 @@ namespace CertHarvester
 			headerDock.Children.Add(actionButtons);
 
 			Grid.SetRow(headerDock, 0);
-			mainGrid.Children.Add(headerDock);
+			_mainContentGrid.Children.Add(headerDock);
 
 			// Строка 1: Ряд 4 адаптивных карточек метрик (KPI)
 			Grid metricsGrid = CreateMetricCards();
 			metricsGrid.Margin = new Thickness(0, 0, 0, 12);
 			Grid.SetRow(metricsGrid, 1);
-			mainGrid.Children.Add(metricsGrid);
+			_mainContentGrid.Children.Add(metricsGrid);
 
 			// Строка 2: Панель поиска и переключатель лицензий
 			DockPanel searchBar = CreateSearchAndFilterBar();
 			searchBar.Margin = new Thickness(0, 0, 0, 12);
 			Grid.SetRow(searchBar, 2);
-			mainGrid.Children.Add(searchBar);
+			_mainContentGrid.Children.Add(searchBar);
 
 			// Строка 3: Таблица сертификатов DataGrid
 			_gridCertificates = CreateCertificatesTable();
-			_gridCertificates.Margin = new Thickness(0, 0, 0, 12);
+			_gridCertificates.Margin = new Thickness(0, 0, 0, 0);
 			Grid.SetRow(_gridCertificates, 3);
-			mainGrid.Children.Add(_gridCertificates);
+			_mainContentGrid.Children.Add(_gridCertificates);
 
-			// Строка 4: Терминал журнала работы
+			// Строка 4: Интерактивный сплиттер (разделитель высоты между таблицей и журналом как в VS Code)
+			_gridSplitter = CreateSashSplitter();
+			Grid.SetRow(_gridSplitter, 4);
+			_mainContentGrid.Children.Add(_gridSplitter);
+
+			// Строка 5: Терминал журнала работы
 			_panelTerminalCard = CreateTerminalCard();
-			Grid.SetRow(_panelTerminalCard, 4);
-			mainGrid.Children.Add(_panelTerminalCard);
+			_panelTerminalCard.Margin = new Thickness(0, 2, 0, 0);
+			Grid.SetRow(_panelTerminalCard, 5);
+			_mainContentGrid.Children.Add(_panelTerminalCard);
 
-			return mainGrid;
+			return _mainContentGrid;
 		}
 
 		// Создание 4 карточек ключевых показателей процесса сканирования
@@ -868,17 +940,17 @@ namespace CertHarvester
 			cardsGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(1.4, GridUnitType.Star) });
 
 			// Карточка 1: Найдено
-			_cardMetricTotal = CreateBaseMetricCard(out _labelMetricTotalNumber, out _labelMetricTotalTitle, "0", "сертификатов найдено", null);
+			_cardMetricTotal = CreateBaseMetricCard(out _labelMetricTotalNumber, out _labelMetricTotalTitle, "0", "Всего в сети", null);
 			Grid.SetColumn(_cardMetricTotal, 0);
 			cardsGrid.Children.Add(_cardMetricTotal);
 
 			// Карточка 2: Добавлено
-			_cardMetricInserted = CreateBaseMetricCard(out _labelMetricInsertedNumber, out _labelMetricInsertedTitle, "0", "добавлено в таблицу", new SolidColorBrush(Color.FromRgb(16, 185, 129)));
+			_cardMetricInserted = CreateBaseMetricCard(out _labelMetricInsertedNumber, out _labelMetricInsertedTitle, "0", "Добавлено в таблицу", new SolidColorBrush(Color.FromRgb(16, 185, 129)));
 			Grid.SetColumn(_cardMetricInserted, 2);
 			cardsGrid.Children.Add(_cardMetricInserted);
 
 			// Карточка 3: Обновлено
-			_cardMetricUpdated = CreateBaseMetricCard(out _labelMetricUpdatedNumber, out _labelMetricUpdatedTitle, "0", "обновлено (без дублей)", new SolidColorBrush(Color.FromRgb(59, 130, 246)));
+			_cardMetricUpdated = CreateBaseMetricCard(out _labelMetricUpdatedNumber, out _labelMetricUpdatedTitle, "0", "Обновлено (без дублей)", new SolidColorBrush(Color.FromRgb(59, 130, 246)));
 			Grid.SetColumn(_cardMetricUpdated, 4);
 			cardsGrid.Children.Add(_cardMetricUpdated);
 
@@ -886,7 +958,7 @@ namespace CertHarvester
 			_cardMetricProgress = new Border();
 			_cardMetricProgress.CornerRadius = new CornerRadius(10);
 			_cardMetricProgress.BorderThickness = new Thickness(1);
-			_cardMetricProgress.Padding = new Thickness(12, 10, 12, 10);
+			_cardMetricProgress.Padding = new Thickness(14, 10, 14, 10);
 			_cardMetricProgress.Height = 84;
 
 			Grid progressGrid = new Grid();
@@ -895,8 +967,8 @@ namespace CertHarvester
 			progressGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
 
 			DockPanel progTop = new DockPanel();
-			_labelProgressSummary = new TextBlock() { Text = "Готов к сканированию", FontWeight = FontWeights.Bold, FontSize = 14 };
-			_labelProgressPercent = new TextBlock() { Text = "", FontSize = 13, FontWeight = FontWeights.SemiBold, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
+			_labelProgressSummary = new TextBlock() { Text = "Готов к сканированию", FontWeight = FontWeights.Bold, FontSize = 13 };
+			_labelProgressPercent = new TextBlock() { Text = "", FontSize = 12, FontWeight = FontWeights.SemiBold, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
 			DockPanel.SetDock(_labelProgressSummary, System.Windows.Controls.Dock.Left);
 			DockPanel.SetDock(_labelProgressPercent, System.Windows.Controls.Dock.Right);
 			progTop.Children.Add(_labelProgressSummary);
@@ -909,11 +981,11 @@ namespace CertHarvester
 			_progressBarCustom.Margin = new Thickness(0, 8, 0, 6);
 			_progressBarCustom.Value = 0;
 			_progressBarCustom.Template = CreateModernProgressBarTemplate();
-			_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(2, 132, 199));
+			_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(37, 99, 235));
 			Grid.SetRow(_progressBarCustom, 1);
 			progressGrid.Children.Add(_progressBarCustom);
 
-			_labelProgressCurrentNode = new TextBlock() { Text = "В очереди на проверку: 0 ПК", FontSize = 11.5, TextTrimming = TextTrimming.None };
+			_labelProgressCurrentNode = new TextBlock() { Text = "В очереди на проверку: 0 ПК", FontSize = 11.5, FontWeight = FontWeights.Normal, TextTrimming = TextTrimming.CharacterEllipsis };
 			Grid.SetRow(_labelProgressCurrentNode, 2);
 			progressGrid.Children.Add(_labelProgressCurrentNode);
 
@@ -962,8 +1034,8 @@ namespace CertHarvester
 
 			titleBlock = new TextBlock();
 			titleBlock.Text = title;
-			titleBlock.FontSize = 13;
-			titleBlock.FontWeight = FontWeights.SemiBold;
+			titleBlock.FontSize = 11.5;
+			titleBlock.FontWeight = FontWeights.Normal;
 			titleBlock.TextTrimming = TextTrimming.CharacterEllipsis;
 			stack.Children.Add(titleBlock);
 
@@ -1183,7 +1255,7 @@ namespace CertHarvester
 			terminalBorder.CornerRadius = new CornerRadius(10);
 			terminalBorder.BorderThickness = new Thickness(1);
 			terminalBorder.Background = new SolidColorBrush(Color.FromRgb(22, 24, 29));
-			terminalBorder.Padding = new Thickness(12, 8, 12, 10);
+			terminalBorder.Padding = new Thickness(12, 6, 12, 6);
 
 			Grid termGrid = new Grid();
 			termGrid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
@@ -1194,7 +1266,7 @@ namespace CertHarvester
 			_labelTerminalTitle.FontWeight = FontWeights.Bold;
 			_labelTerminalTitle.FontSize = 11;
 			_labelTerminalTitle.Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175));
-			_labelTerminalTitle.Margin = new Thickness(2, 0, 0, 6);
+			_labelTerminalTitle.Margin = new Thickness(2, 0, 0, 4);
 			Grid.SetRow(_labelTerminalTitle, 0);
 			termGrid.Children.Add(_labelTerminalTitle);
 
@@ -1207,12 +1279,607 @@ namespace CertHarvester
 			_textTerminalLog.IsReadOnly = true;
 			_textTerminalLog.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
 			_textTerminalLog.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+			_textTerminalLog.Document.PagePadding = new Thickness(0);
+			_textTerminalLog.Document.Blocks.Clear();
+			HandyControl.Controls.ScrollViewer.SetIsInertiaEnabled(_textTerminalLog, false);
+			_textTerminalLog.PreviewMouseWheel += TextTerminalLog_PreviewMouseWheel;
+			_textTerminalLog.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(TextTerminalLog_ScrollChanged));
 
 			Grid.SetRow(_textTerminalLog, 1);
 			termGrid.Children.Add(_textTerminalLog);
 
 			terminalBorder.Child = termGrid;
 			return terminalBorder;
+		}
+
+		// Построчный скроллинг колесиком мыши (1 деление = 1 строка, без плавного смещения)
+		private void TextTerminalLog_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+		{
+			if (_textTerminalLog == null) return;
+			e.Handled = true;
+
+			// Если сменилось направление вращения колесика — сбрасываем накопленный остаток
+			if ((_terminalMouseWheelAccumulator > 0 && e.Delta < 0) || (_terminalMouseWheelAccumulator < 0 && e.Delta > 0))
+			{
+				_terminalMouseWheelAccumulator = 0;
+			}
+
+			_terminalMouseWheelAccumulator += e.Delta;
+			const int deltaPerLine = 120;
+
+			while (Math.Abs(_terminalMouseWheelAccumulator) >= deltaPerLine)
+			{
+				double cur = _textTerminalLog.VerticalOffset;
+				double maxOffset = Math.Max(0, _textTerminalLog.ExtentHeight - _textTerminalLog.ViewportHeight);
+
+				if (_terminalMouseWheelAccumulator > 0)
+				{
+					// Прокрутка вверх строго на 1 строку
+					double target = Math.Floor((cur - 0.5) / TerminalLineHeight) * TerminalLineHeight;
+					if (target < 0) target = 0;
+					_textTerminalLog.ScrollToVerticalOffset(target);
+					_terminalMouseWheelAccumulator -= deltaPerLine;
+				}
+				else
+				{
+					// Прокрутка вниз строго на 1 строку
+					double target = Math.Ceiling((cur + 0.5) / TerminalLineHeight) * TerminalLineHeight;
+					if (target > maxOffset) target = maxOffset;
+					_textTerminalLog.ScrollToVerticalOffset(target);
+					_terminalMouseWheelAccumulator += deltaPerLine;
+				}
+			}
+		}
+
+		// Привязка скроллинга консоли строго к границам строк (дискретно, без плавных полустрок)
+		private void TextTerminalLog_ScrollChanged(object sender, ScrollChangedEventArgs e)
+		{
+			if (_isTerminalSnappingScroll || _textTerminalLog == null) return;
+
+			if (Math.Abs(e.VerticalChange) > 0.001)
+			{
+				double cur = e.VerticalOffset;
+				double maxOffset = Math.Max(0, e.ExtentHeight - e.ViewportHeight);
+
+				// Если оффсет находится в самом низу (ScrollToEnd) — не сдвигаем от нижнего края
+				if (Math.Abs(cur - maxOffset) < 0.5) return;
+
+				double snapped = Math.Round(cur / TerminalLineHeight) * TerminalLineHeight;
+				if (snapped > maxOffset) snapped = maxOffset;
+				if (snapped < 0) snapped = 0;
+
+				if (Math.Abs(cur - snapped) > 0.1)
+				{
+					_isTerminalSnappingScroll = true;
+					_textTerminalLog.ScrollToVerticalOffset(snapped);
+					_isTerminalSnappingScroll = false;
+				}
+			}
+		}
+
+		// Создание интерактивной разделительной полоски (сплиттера) между таблицей и журналом как в VS Code
+		private GridSplitter CreateSashSplitter()
+		{
+			GridSplitter splitter = new GridSplitter
+			{
+				Height = 8,
+				HorizontalAlignment = HorizontalAlignment.Stretch,
+				VerticalAlignment = VerticalAlignment.Center,
+				ResizeDirection = GridResizeDirection.Rows,
+				ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+				Cursor = System.Windows.Input.Cursors.SizeNS,
+				Background = Brushes.Transparent,
+				Focusable = false
+			};
+
+			ControlTemplate template = new ControlTemplate(typeof(GridSplitter));
+			FrameworkElementFactory rootGrid = new FrameworkElementFactory(typeof(Grid));
+			rootGrid.Name = "SashRoot";
+			rootGrid.SetValue(Grid.BackgroundProperty, Brushes.Transparent);
+			rootGrid.SetValue(Grid.HeightProperty, 8.0);
+			rootGrid.SetValue(Grid.CursorProperty, System.Windows.Input.Cursors.SizeNS);
+
+			// Направляющая линия
+			FrameworkElementFactory sashLine = new FrameworkElementFactory(typeof(Border));
+			sashLine.Name = "SashLine";
+			sashLine.SetValue(Border.HeightProperty, 1.5);
+			sashLine.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Center);
+			sashLine.SetValue(Border.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
+			sashLine.SetValue(Border.CornerRadiusProperty, new CornerRadius(0.75));
+			sashLine.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)));
+			rootGrid.AppendChild(sashLine);
+
+			// Центральная плашка с 3 точками (визуальный маркер возможности перетаскивания)
+			FrameworkElementFactory dotsPill = new FrameworkElementFactory(typeof(Border));
+			dotsPill.Name = "DotsPill";
+			dotsPill.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(17, 24, 39)));
+			dotsPill.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+			dotsPill.SetValue(Border.PaddingProperty, new Thickness(4, 1, 4, 1));
+			dotsPill.SetValue(Border.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+			dotsPill.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Center);
+
+			FrameworkElementFactory dotsPanel = new FrameworkElementFactory(typeof(StackPanel));
+			dotsPanel.SetValue(StackPanel.OrientationProperty, System.Windows.Controls.Orientation.Horizontal);
+
+			FrameworkElementFactory dot1 = new FrameworkElementFactory(typeof(Border));
+			dot1.Name = "GripDot1";
+			dot1.SetValue(Border.WidthProperty, 3.5);
+			dot1.SetValue(Border.HeightProperty, 3.5);
+			dot1.SetValue(Border.CornerRadiusProperty, new CornerRadius(1.75));
+			dot1.SetValue(Border.MarginProperty, new Thickness(2, 0, 2, 0));
+			dot1.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(156, 163, 175)));
+			dotsPanel.AppendChild(dot1);
+
+			FrameworkElementFactory dot2 = new FrameworkElementFactory(typeof(Border));
+			dot2.Name = "GripDot2";
+			dot2.SetValue(Border.WidthProperty, 3.5);
+			dot2.SetValue(Border.HeightProperty, 3.5);
+			dot2.SetValue(Border.CornerRadiusProperty, new CornerRadius(1.75));
+			dot2.SetValue(Border.MarginProperty, new Thickness(2, 0, 2, 0));
+			dot2.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(156, 163, 175)));
+			dotsPanel.AppendChild(dot2);
+
+			FrameworkElementFactory dot3 = new FrameworkElementFactory(typeof(Border));
+			dot3.Name = "GripDot3";
+			dot3.SetValue(Border.WidthProperty, 3.5);
+			dot3.SetValue(Border.HeightProperty, 3.5);
+			dot3.SetValue(Border.CornerRadiusProperty, new CornerRadius(1.75));
+			dot3.SetValue(Border.MarginProperty, new Thickness(2, 0, 2, 0));
+			dot3.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(156, 163, 175)));
+			dotsPanel.AppendChild(dot3);
+
+			dotsPill.AppendChild(dotsPanel);
+			rootGrid.AppendChild(dotsPill);
+
+			template.VisualTree = rootGrid;
+			splitter.Template = template;
+
+			splitter.MouseEnter += (s, e) =>
+			{
+				SetSplitterHighlight(true);
+			};
+
+			splitter.MouseLeave += (s, e) =>
+			{
+				if (!splitter.IsDragging)
+				{
+					SetSplitterHighlight(false);
+				}
+			};
+
+			splitter.DragStarted += (s, e) =>
+			{
+				_currentDragHeight = _rowDefTerminal != null && _rowDefTerminal.ActualHeight > 40 ? _rowDefTerminal.ActualHeight : 170;
+				_isDragSnappedToClose = _panelTerminalCard != null && _panelTerminalCard.Visibility != Visibility.Visible;
+				SetSplitterHighlight(true);
+			};
+
+			splitter.DragDelta += (s, e) =>
+			{
+				e.Handled = true;
+
+				double availHeight;
+				if (_mainContentGrid != null && _mainContentGrid.ActualHeight > 0)
+				{
+					Point mousePos = System.Windows.Input.Mouse.GetPosition(_mainContentGrid);
+					availHeight = _mainContentGrid.ActualHeight - mousePos.Y;
+				}
+				else
+				{
+					_currentDragHeight -= e.VerticalChange;
+					availHeight = _currentDragHeight;
+				}
+
+				if (availHeight < SnapCloseThreshold)
+				{
+					// Положение 2 (Фиксация за закрытием): журнал схлопнут в 0, нижняя граница таблицы на уровне левой панели, а полоска чуть ниже
+					_isDragSnappedToClose = true;
+					_panelTerminalCard.Visibility = Visibility.Collapsed;
+					if (_rowDefTerminal != null)
+					{
+						_rowDefTerminal.Height = new GridLength(0);
+					}
+					if (_rowDefSplitter != null)
+					{
+						_rowDefSplitter.Height = new GridLength(0);
+					}
+					Grid.SetRow(splitter, 3);
+					splitter.VerticalAlignment = VerticalAlignment.Bottom;
+					splitter.Margin = new Thickness(0, 0, 0, -8);
+				}
+				else if (availHeight < SnapToMinThreshold)
+				{
+					// Положение 1 (Фиксация на грани размера журнала: минимальный размер ровно в 1 строку)
+					_isDragSnappedToClose = false;
+					_panelTerminalCard.Visibility = Visibility.Visible;
+					if (_rowDefTerminal != null)
+					{
+						_rowDefTerminal.Height = new GridLength(MinConsoleVisibleHeight);
+					}
+					Grid.SetRow(splitter, 4);
+					splitter.VerticalAlignment = VerticalAlignment.Center;
+					splitter.Margin = new Thickness(0);
+					if (_rowDefSplitter != null)
+					{
+						_rowDefSplitter.Height = new GridLength(8);
+					}
+					_textTerminalLog?.ScrollToEnd();
+				}
+				else
+				{
+					// Свободное перетаскивание выше минимального размера
+					double maxTerminalH = _mainContentGrid != null && _mainContentGrid.ActualHeight > 200 
+						? _mainContentGrid.ActualHeight - 120.0 
+						: 600.0;
+
+					_isDragSnappedToClose = false;
+					_panelTerminalCard.Visibility = Visibility.Visible;
+					double h = Math.Min(maxTerminalH, availHeight);
+					if (_rowDefTerminal != null)
+					{
+						_rowDefTerminal.Height = new GridLength(h);
+					}
+					Grid.SetRow(splitter, 4);
+					splitter.VerticalAlignment = VerticalAlignment.Center;
+					splitter.Margin = new Thickness(0);
+					if (_rowDefSplitter != null)
+					{
+						_rowDefSplitter.Height = new GridLength(8);
+					}
+				}
+			};
+
+			splitter.DragCompleted += (s, e) =>
+			{
+				SetSplitterHighlight(false);
+
+				if (_isDragSnappedToClose)
+				{
+					// При отпускании в положении закрытия — полоска полностью пропадает,
+					// а нижняя граница таблицы остается строго на одной высоте с левой панелью
+					_isBottomPanelVisible = false;
+					_panelTerminalCard.Visibility = Visibility.Collapsed;
+					splitter.Visibility = Visibility.Collapsed;
+					if (_rowDefSplitter != null)
+					{
+						_rowDefSplitter.Height = new GridLength(0);
+					}
+					if (_rowDefTerminal != null)
+					{
+						_rowDefTerminal.Height = new GridLength(0);
+					}
+					Grid.SetRow(splitter, 4);
+					splitter.VerticalAlignment = VerticalAlignment.Center;
+					splitter.Margin = new Thickness(0);
+
+					Brush normBrush = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+					UpdateBottomToggleButtonState(normBrush, normBrush);
+				}
+				else
+				{
+					// Зафиксировать открытое положение
+					_isBottomPanelVisible = true;
+					_panelTerminalCard.Visibility = Visibility.Visible;
+					splitter.Visibility = Visibility.Visible;
+					Grid.SetRow(splitter, 4);
+					splitter.VerticalAlignment = VerticalAlignment.Center;
+					splitter.Margin = new Thickness(0);
+					if (_rowDefSplitter != null)
+					{
+						_rowDefSplitter.Height = new GridLength(8);
+					}
+					_terminalLastHeight = Math.Max(MinConsoleVisibleHeight, _rowDefTerminal != null ? _rowDefTerminal.ActualHeight : 170);
+					if (_rowDefTerminal != null)
+					{
+						_rowDefTerminal.Height = new GridLength(_terminalLastHeight);
+					}
+					_textTerminalLog?.ScrollToEnd();
+					Brush normBrush = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+					UpdateBottomToggleButtonState(normBrush, normBrush);
+				}
+			};
+
+			return splitter;
+		}
+
+		// Подсветка разделителя и его 3 точек при наведении или перетаскивании
+		private void SetSplitterHighlight(bool isHighlighted)
+		{
+			if (_gridSplitter == null) return;
+			Border line = _gridSplitter.Template?.FindName("SashLine", _gridSplitter) as Border;
+			Border dot1 = _gridSplitter.Template?.FindName("GripDot1", _gridSplitter) as Border;
+			Border dot2 = _gridSplitter.Template?.FindName("GripDot2", _gridSplitter) as Border;
+			Border dot3 = _gridSplitter.Template?.FindName("GripDot3", _gridSplitter) as Border;
+
+			Brush brush = isHighlighted
+				? new SolidColorBrush(Color.FromRgb(59, 130, 246))
+				: (_splitterNormalBrush ?? new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)));
+
+			if (line != null)
+			{
+				line.Background = brush;
+				line.Height = isHighlighted ? 2.0 : 1.5;
+			}
+			if (dot1 != null) dot1.Background = brush;
+			if (dot2 != null) dot2.Background = brush;
+			if (dot3 != null) dot3.Background = brush;
+		}
+
+		// Инициализация кнопок управления отображением панелей в шапке окна (в стиле VS Code)
+		private void InitializeTitleBarLayoutControls()
+		{
+			StackPanel titleBarPanel = new StackPanel
+			{
+				Orientation = System.Windows.Controls.Orientation.Horizontal,
+				HorizontalAlignment = HorizontalAlignment.Right,
+				VerticalAlignment = VerticalAlignment.Center,
+				Margin = new Thickness(0, 0, 6, 0)
+			};
+
+			SolidColorBrush initialBrush = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+
+			_buttonToggleSidebar = CreateLayoutTitleButton(
+				CreateSidebarToggleIcon(_isSidebarVisible, initialBrush),
+				"Скрыть боковую панель",
+				ButtonToggleSidebar_Click
+			);
+			_buttonToggleSidebar.Margin = new Thickness(1, 0, 1, 0);
+
+			_buttonToggleBottomPanel = CreateLayoutTitleButton(
+				CreateBottomToggleIcon(_isBottomPanelVisible, initialBrush),
+				"Скрыть панель журнала",
+				ButtonToggleBottomPanel_Click
+			);
+			_buttonToggleBottomPanel.Margin = new Thickness(1, 0, 1, 0);
+
+			_buttonToggleSidebar.MouseEnter += (s, e) =>
+			{
+				Brush bright = new SolidColorBrush(Color.FromRgb(243, 244, 246));
+				UpdateSidebarToggleButtonState(bright, bright);
+			};
+			_buttonToggleSidebar.MouseLeave += (s, e) =>
+			{
+				Brush normal = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+				UpdateSidebarToggleButtonState(normal, normal);
+			};
+
+			_buttonToggleBottomPanel.MouseEnter += (s, e) =>
+			{
+				Brush bright = new SolidColorBrush(Color.FromRgb(243, 244, 246));
+				UpdateBottomToggleButtonState(bright, bright);
+			};
+			_buttonToggleBottomPanel.MouseLeave += (s, e) =>
+			{
+				Brush normal = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+				UpdateBottomToggleButtonState(normal, normal);
+			};
+
+			titleBarPanel.Children.Add(_buttonToggleSidebar);
+			titleBarPanel.Children.Add(_buttonToggleBottomPanel);
+
+			this.NonClientAreaContent = titleBarPanel;
+		}
+
+		// Создание кнопки в шапке с эффектом наведения
+		private System.Windows.Controls.Button CreateLayoutTitleButton(UIElement iconContent, string tooltipText, RoutedEventHandler clickHandler)
+		{
+			System.Windows.Controls.Button btn = new System.Windows.Controls.Button
+			{
+				Width = 28,
+				Height = 24,
+				Cursor = System.Windows.Input.Cursors.Hand,
+				Margin = new Thickness(2, 0, 2, 0),
+				ToolTip = tooltipText,
+				Focusable = false,
+				Content = iconContent
+			};
+
+			ControlTemplate template = new ControlTemplate(typeof(System.Windows.Controls.Button));
+			FrameworkElementFactory borderFactory = new FrameworkElementFactory(typeof(Border));
+			borderFactory.Name = "BtnHoverBorder";
+			borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+			borderFactory.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+
+			FrameworkElementFactory presenterFactory = new FrameworkElementFactory(typeof(ContentPresenter));
+			presenterFactory.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+			presenterFactory.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+
+			borderFactory.AppendChild(presenterFactory);
+			template.VisualTree = borderFactory;
+
+			Trigger hoverTrigger = new Trigger { Property = System.Windows.Controls.Button.IsMouseOverProperty, Value = true };
+			hoverTrigger.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(Color.FromArgb(35, 255, 255, 255)), "BtnHoverBorder"));
+			template.Triggers.Add(hoverTrigger);
+
+			Trigger pressedTrigger = new Trigger { Property = System.Windows.Controls.Button.IsPressedProperty, Value = true };
+			pressedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)), "BtnHoverBorder"));
+			template.Triggers.Add(pressedTrigger);
+
+			btn.Template = template;
+			btn.Click += clickHandler;
+			return btn;
+		}
+
+		// Создание векторной иконки переключения боковой панели в стиле VS Code
+		private UIElement CreateSidebarToggleIcon(bool isOpen, Brush strokeAndFillBrush)
+		{
+			_iconSidebarOuter = new Border
+			{
+				Width = 16,
+				Height = 13,
+				CornerRadius = new CornerRadius(2.5),
+				BorderThickness = new Thickness(1.2),
+				BorderBrush = strokeAndFillBrush,
+				Background = Brushes.Transparent
+			};
+
+			Grid grid = new Grid();
+			grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(5) });
+			grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+			_iconSidebarLeft = new Border
+			{
+				Background = isOpen ? strokeAndFillBrush : Brushes.Transparent,
+				BorderThickness = new Thickness(0, 0, 1.2, 0),
+				BorderBrush = strokeAndFillBrush,
+				CornerRadius = new CornerRadius(1.3, 0, 0, 1.3)
+			};
+			Grid.SetColumn(_iconSidebarLeft, 0);
+			grid.Children.Add(_iconSidebarLeft);
+
+			_iconSidebarOuter.Child = grid;
+			return _iconSidebarOuter;
+		}
+
+		// Создание векторной иконки переключения нижней панели журнала в стиле VS Code
+		private UIElement CreateBottomToggleIcon(bool isOpen, Brush strokeAndFillBrush)
+		{
+			_iconBottomOuter = new Border
+			{
+				Width = 16,
+				Height = 13,
+				CornerRadius = new CornerRadius(2.5),
+				BorderThickness = new Thickness(1.2),
+				BorderBrush = strokeAndFillBrush,
+				Background = Brushes.Transparent
+			};
+
+			Grid grid = new Grid();
+			grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+			grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4.5) });
+
+			_iconBottomPart = new Border
+			{
+				Background = isOpen ? strokeAndFillBrush : Brushes.Transparent,
+				BorderThickness = new Thickness(0, 1.2, 0, 0),
+				BorderBrush = strokeAndFillBrush,
+				CornerRadius = new CornerRadius(0, 0, 1.3, 1.3)
+			};
+			Grid.SetRow(_iconBottomPart, 1);
+			grid.Children.Add(_iconBottomPart);
+
+			_iconBottomOuter.Child = grid;
+			return _iconBottomOuter;
+		}
+
+		// Обновление состояния иконки боковой панели
+		private void UpdateSidebarToggleButtonState(Brush strokeBrush, Brush fillBrush)
+		{
+			if (_iconSidebarOuter != null)
+			{
+				_iconSidebarOuter.BorderBrush = strokeBrush;
+			}
+			if (_iconSidebarLeft != null)
+			{
+				_iconSidebarLeft.BorderBrush = strokeBrush;
+				_iconSidebarLeft.Background = _isSidebarVisible ? fillBrush : Brushes.Transparent;
+			}
+			if (_buttonToggleSidebar != null)
+			{
+				_buttonToggleSidebar.ToolTip = _isSidebarVisible ? "Скрыть боковую панель" : "Показать боковую панель";
+			}
+		}
+
+		// Обновление состояния иконки нижней панели
+		private void UpdateBottomToggleButtonState(Brush strokeBrush, Brush fillBrush)
+		{
+			if (_iconBottomOuter != null)
+			{
+				_iconBottomOuter.BorderBrush = strokeBrush;
+			}
+			if (_iconBottomPart != null)
+			{
+				_iconBottomPart.BorderBrush = strokeBrush;
+				_iconBottomPart.Background = _isBottomPanelVisible ? fillBrush : Brushes.Transparent;
+			}
+			if (_buttonToggleBottomPanel != null)
+			{
+				_buttonToggleBottomPanel.ToolTip = _isBottomPanelVisible ? "Скрыть панель журнала" : "Показать панель журнала";
+			}
+		}
+
+		// Обработчик скрытия/показа боковой панели
+		private void ButtonToggleSidebar_Click(object sender, RoutedEventArgs e)
+		{
+			_isSidebarVisible = !_isSidebarVisible;
+			if (_isSidebarVisible)
+			{
+				_sidebarCard.Visibility = Visibility.Visible;
+				if (_rootColSidebar != null)
+				{
+					_rootColSidebar.Width = new GridLength(295);
+				}
+				if (_rootColGap != null)
+				{
+					_rootColGap.Width = new GridLength(14);
+				}
+			}
+			else
+			{
+				_sidebarCard.Visibility = Visibility.Collapsed;
+				if (_rootColSidebar != null)
+				{
+					_rootColSidebar.Width = new GridLength(0);
+				}
+				if (_rootColGap != null)
+				{
+					_rootColGap.Width = new GridLength(0);
+				}
+			}
+			Brush activeBrush = _buttonToggleSidebar != null && _buttonToggleSidebar.IsMouseOver ? new SolidColorBrush(Color.FromRgb(243, 244, 246)) : new SolidColorBrush(Color.FromRgb(156, 163, 175));
+			UpdateSidebarToggleButtonState(activeBrush, activeBrush);
+		}
+
+		// Обработчик скрытия/показа нижней панели журнала
+		private void ButtonToggleBottomPanel_Click(object sender, RoutedEventArgs e)
+		{
+			_isBottomPanelVisible = !_isBottomPanelVisible;
+			if (_isBottomPanelVisible)
+			{
+				_panelTerminalCard.Visibility = Visibility.Visible;
+				if (_gridSplitter != null)
+				{
+					_gridSplitter.Visibility = Visibility.Visible;
+					Grid.SetRow(_gridSplitter, 4);
+					_gridSplitter.VerticalAlignment = VerticalAlignment.Center;
+					_gridSplitter.Margin = new Thickness(0);
+				}
+				if (_rowDefSplitter != null)
+				{
+					_rowDefSplitter.Height = new GridLength(8);
+				}
+				if (_rowDefTerminal != null)
+				{
+					_rowDefTerminal.Height = new GridLength(_terminalLastHeight > 40 ? _terminalLastHeight : 170);
+				}
+				_isDragSnappedToClose = false;
+			}
+			else
+			{
+				if (_rowDefTerminal != null && _rowDefTerminal.ActualHeight > 40)
+				{
+					_terminalLastHeight = _rowDefTerminal.ActualHeight;
+				}
+				_panelTerminalCard.Visibility = Visibility.Collapsed;
+				if (_gridSplitter != null)
+				{
+					_gridSplitter.Visibility = Visibility.Collapsed;
+					Grid.SetRow(_gridSplitter, 4);
+					_gridSplitter.VerticalAlignment = VerticalAlignment.Center;
+					_gridSplitter.Margin = new Thickness(0);
+				}
+				if (_rowDefSplitter != null)
+				{
+					_rowDefSplitter.Height = new GridLength(0);
+				}
+				if (_rowDefTerminal != null)
+				{
+					_rowDefTerminal.Height = new GridLength(0);
+				}
+				_isDragSnappedToClose = true;
+			}
+			Brush activeBrush = _buttonToggleBottomPanel != null && _buttonToggleBottomPanel.IsMouseOver ? new SolidColorBrush(Color.FromRgb(243, 244, 246)) : new SolidColorBrush(Color.FromRgb(156, 163, 175));
+			UpdateBottomToggleButtonState(activeBrush, activeBrush);
 		}
 
 		// Применение визуального стиля и палитры ко всем компонентам окна (всегда тёмная тема)
@@ -1328,6 +1995,21 @@ namespace CertHarvester
 			_panelTerminalCard.BorderBrush = isDark ? new SolidColorBrush(Color.FromRgb(55, 65, 81)) : new SolidColorBrush(Color.FromRgb(31, 41, 55));
 			_labelTerminalTitle.Foreground = textSecondary;
 
+			// Сплиттер и кнопки шапки в стиле VS Code
+			_splitterNormalBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+			if (_gridSplitter != null)
+			{
+				SetSplitterHighlight(false);
+				Border pill = _gridSplitter.Template?.FindName("DotsPill", _gridSplitter) as Border;
+				if (pill != null)
+				{
+					pill.Background = windowBg;
+				}
+			}
+
+			UpdateSidebarToggleButtonState(textSecondary, textSecondary);
+			UpdateBottomToggleButtonState(textSecondary, textSecondary);
+
 			UpdateQuickFilterButtonStyles();
 			RenderComputersList();
 			RenderDirectoriesList();
@@ -1374,6 +2056,22 @@ namespace CertHarvester
 			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.BorderBrushProperty, new SolidColorBrush(gridBorder)));
 			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.PaddingProperty, new Thickness(10, 0, 10, 0)));
 			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.VerticalContentAlignmentProperty, VerticalAlignment.Center));
+			headerStyle.Setters.Add(new Setter(ToolTipService.InitialShowDelayProperty, 250));
+			headerStyle.Setters.Add(new Setter(ToolTipService.BetweenShowDelayProperty, 100));
+
+			// Шаблон с обрезкой текста заголовка многоточием при сжатии
+			DataTemplate headerTemplate = new DataTemplate();
+			FrameworkElementFactory headerTextFactory = new FrameworkElementFactory(typeof(TextBlock));
+			headerTextFactory.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding());
+			headerTextFactory.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+			headerTextFactory.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+			headerTemplate.VisualTree = headerTextFactory;
+			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.ContentTemplateProperty, headerTemplate));
+
+			headerStyle.Setters.Add(new EventSetter(UIElement.MouseEnterEvent, new MouseEventHandler(OnColumnHeaderMouseEnter)));
+			headerStyle.Setters.Add(new EventSetter(UIElement.MouseMoveEvent, new MouseEventHandler(OnColumnHeaderMouseMove)));
+			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.ToolTipProperty, " "));
+			headerStyle.Setters.Add(new EventSetter(ToolTipService.ToolTipOpeningEvent, new ToolTipEventHandler(OnColumnHeaderToolTipOpening)));
 			_gridCertificates.ColumnHeaderStyle = headerStyle;
 
 			// Стиль строк таблицы с эффектами наведения курсора и выделения
@@ -1399,6 +2097,18 @@ namespace CertHarvester
 			cellStyle.Setters.Add(new Setter(DataGridCell.ForegroundProperty, new SolidColorBrush(textPrimary)));
 			cellStyle.Setters.Add(new Setter(DataGridCell.BackgroundProperty, Brushes.Transparent));
 
+			ControlTemplate cellTemplate = new ControlTemplate(typeof(DataGridCell));
+			FrameworkElementFactory cellBorderFactory = new FrameworkElementFactory(typeof(Border));
+			cellBorderFactory.SetBinding(Border.BackgroundProperty, new System.Windows.Data.Binding("Background") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+			cellBorderFactory.SetBinding(Border.BorderBrushProperty, new System.Windows.Data.Binding("BorderBrush") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+			cellBorderFactory.SetBinding(Border.BorderThicknessProperty, new System.Windows.Data.Binding("BorderThickness") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+
+			FrameworkElementFactory cpFactory = new FrameworkElementFactory(typeof(ContentPresenter));
+			cpFactory.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+			cellBorderFactory.AppendChild(cpFactory);
+			cellTemplate.VisualTree = cellBorderFactory;
+			cellStyle.Setters.Add(new Setter(DataGridCell.TemplateProperty, cellTemplate));
+
 			Trigger cellSelectedTrigger = new Trigger() { Property = DataGridCell.IsSelectedProperty, Value = true };
 			cellSelectedTrigger.Setters.Add(new Setter(DataGridCell.BackgroundProperty, new SolidColorBrush(rowSelectedBg)));
 			cellSelectedTrigger.Setters.Add(new Setter(DataGridCell.ForegroundProperty, new SolidColorBrush(rowSelectedFg)));
@@ -1411,6 +2121,12 @@ namespace CertHarvester
 			textColStyle.Setters.Add(new Setter(TextBlock.MarginProperty, new Thickness(10, 0, 10, 0)));
 			textColStyle.Setters.Add(new Setter(TextBlock.ForegroundProperty, new SolidColorBrush(textPrimary)));
 			textColStyle.Setters.Add(new Setter(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis));
+			textColStyle.Setters.Add(new Setter(ToolTipService.InitialShowDelayProperty, 250));
+			textColStyle.Setters.Add(new Setter(ToolTipService.BetweenShowDelayProperty, 100));
+			textColStyle.Setters.Add(new EventSetter(UIElement.MouseEnterEvent, new MouseEventHandler(OnCellTextBlockMouseEnter)));
+			textColStyle.Setters.Add(new EventSetter(UIElement.MouseMoveEvent, new MouseEventHandler(OnCellTextBlockMouseMove)));
+			textColStyle.Setters.Add(new Setter(TextBlock.ToolTipProperty, " "));
+			textColStyle.Setters.Add(new EventSetter(ToolTipService.ToolTipOpeningEvent, new ToolTipEventHandler(OnCellTextBlockToolTipOpening)));
 
 			DataTrigger selTextTrigger = new DataTrigger()
 			{
@@ -1420,9 +2136,10 @@ namespace CertHarvester
 			selTextTrigger.Setters.Add(new Setter(TextBlock.ForegroundProperty, new SolidColorBrush(rowSelectedFg)));
 			textColStyle.Triggers.Add(selTextTrigger);
 
-			for (int c = 0; c < 6; c++)
+			for (int c = 0; c < _gridCertificates.Columns.Count; c++)
 			{
-				if (c < _gridCertificates.Columns.Count && _gridCertificates.Columns[c] is DataGridTextColumn txtCol)
+				if (c == 6) continue; // Колонка 6 ("Лицензия встроена") настраивается ниже через licenseColStyle
+				if (_gridCertificates.Columns[c] is DataGridTextColumn txtCol)
 				{
 					txtCol.ElementStyle = textColStyle;
 				}
@@ -1432,6 +2149,10 @@ namespace CertHarvester
 			Style licenseColStyle = new Style(typeof(TextBlock));
 			licenseColStyle.Setters.Add(new Setter(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center));
 			licenseColStyle.Setters.Add(new Setter(TextBlock.MarginProperty, new Thickness(10, 0, 10, 0)));
+			licenseColStyle.Setters.Add(new Setter(ToolTipService.InitialShowDelayProperty, 250));
+			licenseColStyle.Setters.Add(new Setter(ToolTipService.BetweenShowDelayProperty, 100));
+			licenseColStyle.Setters.Add(new Setter(TextBlock.ToolTipProperty, " "));
+			licenseColStyle.Setters.Add(new EventSetter(ToolTipService.ToolTipOpeningEvent, new ToolTipEventHandler(OnCellTextBlockToolTipOpening)));
 
 			DataTrigger licTrueTrigger = new DataTrigger()
 			{
@@ -1468,6 +2189,178 @@ namespace CertHarvester
 			title.Foreground = titleColor;
 		}
 
+		// Обработчик наведения мыши на заголовок колонки таблицы
+		private void OnColumnHeaderMouseEnter(object sender, MouseEventArgs e)
+		{
+			UpdateColumnHeaderToolTip(sender as DataGridColumnHeader);
+		}
+
+		// Обработчик движения мыши по заголовку колонки (на случай изменения ширины колонок)
+		private void OnColumnHeaderMouseMove(object sender, MouseEventArgs e)
+		{
+			UpdateColumnHeaderToolTip(sender as DataGridColumnHeader);
+		}
+
+		// Динамическое отображение ToolTip для заголовка колонки, если текст не помещается полностью
+		private void UpdateColumnHeaderToolTip(DataGridColumnHeader header)
+		{
+			if (header == null || header.Content == null || header.ActualWidth <= 0)
+			{
+				if (header != null) header.ToolTip = null;
+				return;
+			}
+
+			string fullText = header.Content.ToString();
+			if (string.IsNullOrEmpty(fullText))
+			{
+				header.ToolTip = null;
+				return;
+			}
+
+			string baseTitle = header.Column != null ? GetBaseColumnTitle(header.Column.SortMemberPath) : fullText;
+			if (string.IsNullOrEmpty(baseTitle))
+			{
+				baseTitle = fullText;
+			}
+
+			Typeface typeface = new Typeface(header.FontFamily, header.FontStyle, header.FontWeight, header.FontStretch);
+			FormattedText ft = new FormattedText(
+				fullText,
+				System.Globalization.CultureInfo.CurrentCulture,
+				FlowDirection.LeftToRight,
+				typeface,
+				header.FontSize,
+				Brushes.Black
+			);
+
+			double availableWidth = header.ActualWidth - header.Padding.Left - header.Padding.Right - 6.0;
+			if (ft.Width > availableWidth)
+			{
+				header.ToolTip = baseTitle;
+			}
+			else
+			{
+				header.ToolTip = null;
+			}
+		}
+
+		// Обработчик наведения мыши на текстовую ячейку таблицы
+		private void OnCellTextBlockMouseEnter(object sender, MouseEventArgs e)
+		{
+			UpdateCellTextBlockToolTip(sender as TextBlock);
+		}
+
+		// Обработчик движения мыши по ячейке таблицы
+		private void OnCellTextBlockMouseMove(object sender, MouseEventArgs e)
+		{
+			UpdateCellTextBlockToolTip(sender as TextBlock);
+		}
+
+		// Динамическое отображение ToolTip для текстовой ячейки, если текст обрезан многоточием
+		private void UpdateCellTextBlockToolTip(TextBlock tb)
+		{
+			if (tb == null || string.IsNullOrEmpty(tb.Text) || tb.ActualWidth <= 0)
+			{
+				if (tb != null) tb.ToolTip = null;
+				return;
+			}
+
+			Typeface typeface = new Typeface(tb.FontFamily, tb.FontStyle, tb.FontWeight, tb.FontStretch);
+			FormattedText ft = new FormattedText(
+				tb.Text,
+				System.Globalization.CultureInfo.CurrentCulture,
+				FlowDirection.LeftToRight,
+				typeface,
+				tb.FontSize,
+				Brushes.Black
+			);
+
+			if (ft.Width > tb.ActualWidth + 1.0)
+			{
+				tb.ToolTip = tb.Text;
+			}
+			else
+			{
+				tb.ToolTip = null;
+			}
+		}
+
+		// Обработчик события открытия всплывающей подсказки для заголовка колонки (показывает ToolTip только если текст обрезан)
+		private void OnColumnHeaderToolTipOpening(object sender, ToolTipEventArgs e)
+		{
+			DataGridColumnHeader header = sender as DataGridColumnHeader;
+			if (header == null || header.Content == null || header.ActualWidth <= 0)
+			{
+				e.Handled = true;
+				return;
+			}
+
+			string fullText = header.Content.ToString();
+			if (string.IsNullOrEmpty(fullText))
+			{
+				e.Handled = true;
+				return;
+			}
+
+			string baseTitle = header.Column != null ? GetBaseColumnTitle(header.Column.SortMemberPath) : fullText;
+			if (string.IsNullOrEmpty(baseTitle))
+			{
+				baseTitle = fullText;
+			}
+
+			Typeface typeface = new Typeface(header.FontFamily, header.FontStyle, header.FontWeight, header.FontStretch);
+			FormattedText ft = new FormattedText(
+				fullText,
+				System.Globalization.CultureInfo.CurrentCulture,
+				FlowDirection.LeftToRight,
+				typeface,
+				header.FontSize,
+				Brushes.Black
+			);
+
+			double availableWidth = header.ActualWidth - header.Padding.Left - header.Padding.Right - 6.0;
+			if (ft.Width > availableWidth)
+			{
+				header.ToolTip = baseTitle;
+				e.Handled = false;
+			}
+			else
+			{
+				e.Handled = true;
+			}
+		}
+
+		// Обработчик события открытия всплывающей подсказки для ячейки таблицы (показывает ToolTip только если текст обрезан)
+		private void OnCellTextBlockToolTipOpening(object sender, ToolTipEventArgs e)
+		{
+			TextBlock tb = sender as TextBlock;
+			if (tb == null || string.IsNullOrEmpty(tb.Text) || tb.ActualWidth <= 0)
+			{
+				e.Handled = true;
+				return;
+			}
+
+			Typeface typeface = new Typeface(tb.FontFamily, tb.FontStyle, tb.FontWeight, tb.FontStretch);
+			FormattedText ft = new FormattedText(
+				tb.Text,
+				System.Globalization.CultureInfo.CurrentCulture,
+				FlowDirection.LeftToRight,
+				typeface,
+				tb.FontSize,
+				Brushes.Black
+			);
+
+			if (ft.Width > tb.ActualWidth + 1.0)
+			{
+				tb.ToolTip = tb.Text;
+				e.Handled = false;
+			}
+			else
+			{
+				e.Handled = true;
+			}
+		}
+
 		// Загрузка реальных конфигурационных параметров и сохраненных сертификатов из config.json
 		private void LoadConfigurationFromJsonFile()
 		{
@@ -1490,6 +2383,7 @@ namespace CertHarvester
 							node.Username = cred.Username;
 							node.Password = cred.Password;
 							node.IsConnected = cred.IsConnected;
+							node.SearchMode = string.IsNullOrEmpty(cred.SearchMode) ? "All" : cred.SearchMode;
 							if (cred.CustomDirectories != null)
 							{
 								node.CustomDirectories = new List<string>(cred.CustomDirectories);
@@ -1894,8 +2788,9 @@ namespace CertHarvester
 						{
 							node.Status = node.IsConnected ? "Готово" : "В очереди";
 						}
-						AppendTerminalLog(string.Format("{0} - Быстрая проверка {1} ({2}): узел доступен (Ping: {3} мс, SMB 445: {4})", 
-							DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, node.IpAddress, pingMs, isSmbOpen ? "открыт" : "закрыт"), Color.FromRgb(52, 211, 153));
+						string pingInfo = pingMs > 0 ? string.Format("{0} мс", pingMs) : (NetworkScanner.IsLocalHostOrLoopback(node.IpAddress) ? "< 1 мс" : "нет ответа");
+						AppendTerminalLog(string.Format("{0} - Быстрая проверка {1} ({2}): узел доступен (Ping: {3}, SMB 445: {4})", 
+							DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, node.IpAddress, pingInfo, isSmbOpen ? "открыт" : "закрыт"), Color.FromRgb(52, 211, 153));
 					}
 					else
 					{
@@ -1965,22 +2860,58 @@ namespace CertHarvester
 					textStack.Children.Add(userRow);
 				}
 
-				if (node.CustomDirectories != null && node.CustomDirectories.Count > 0)
+				// Отображение режима поиска и папок в сайдбаре
+				string searchMode = string.IsNullOrEmpty(node.SearchMode) ? "All" : node.SearchMode;
+				if (string.Equals(searchMode, "Standard", StringComparison.OrdinalIgnoreCase))
 				{
-					StackPanel dirsRow = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 0) };
-					System.Windows.Controls.Image folderImg = LucideIcons.CreateWpfImage("folder", 11, System.Drawing.Color.FromArgb(251, 191, 36));
-					folderImg.Margin = new Thickness(0, 0, 4, 0);
-					dirsRow.Children.Add(folderImg);
-
-					TextBlock dirsBlock = new TextBlock()
+					StackPanel stdRow = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 0) };
+					System.Windows.Controls.Image stdImg = LucideIcons.CreateWpfImage("settings", 10, System.Drawing.Color.FromArgb(148, 163, 184));
+					stdImg.Margin = new Thickness(0, 0, 4, 0);
+					stdRow.Children.Add(stdImg);
+					stdRow.Children.Add(new TextBlock
 					{
-						Text = string.Format("Папок: {0}", node.CustomDirectories.Count),
+						Text = "Стандартные пути",
+						FontSize = 9,
+						Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+						VerticalAlignment = VerticalAlignment.Center
+					});
+					textStack.Children.Add(stdRow);
+				}
+				else if (string.Equals(searchMode, "Custom", StringComparison.OrdinalIgnoreCase))
+				{
+					StackPanel custRow = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 0) };
+					System.Windows.Controls.Image custImg = LucideIcons.CreateWpfImage("folder", 10, System.Drawing.Color.FromArgb(251, 191, 36));
+					custImg.Margin = new Thickness(0, 0, 4, 0);
+					custRow.Children.Add(custImg);
+					int count = node.CustomDirectories != null ? node.CustomDirectories.Count : 0;
+					custRow.Children.Add(new TextBlock
+					{
+						Text = string.Format("Кастомные пути ({0})", count),
 						FontSize = 9,
 						Foreground = new SolidColorBrush(Color.FromRgb(251, 191, 36)),
 						VerticalAlignment = VerticalAlignment.Center
-					};
-					dirsRow.Children.Add(dirsBlock);
-					textStack.Children.Add(dirsRow);
+					});
+					textStack.Children.Add(custRow);
+				}
+				else
+				{
+					if (node.CustomDirectories != null && node.CustomDirectories.Count > 0)
+					{
+						StackPanel dirsRow = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 0) };
+						System.Windows.Controls.Image folderImg = LucideIcons.CreateWpfImage("folder", 11, System.Drawing.Color.FromArgb(96, 165, 250));
+						folderImg.Margin = new Thickness(0, 0, 4, 0);
+						dirsRow.Children.Add(folderImg);
+
+						TextBlock dirsBlock = new TextBlock()
+						{
+							Text = string.Format("Общий поиск ({0} папок)", node.CustomDirectories.Count),
+							FontSize = 9,
+							Foreground = new SolidColorBrush(Color.FromRgb(147, 197, 253)),
+							VerticalAlignment = VerticalAlignment.Center
+						};
+						dirsRow.Children.Add(dirsBlock);
+						textStack.Children.Add(dirsRow);
+					}
 				}
 
 				dock.Children.Add(textStack);
@@ -2042,10 +2973,11 @@ namespace CertHarvester
 			{
 				NetworkNodeItem node = _networkNodes[i];
 				_currentConfig.NetworkComputers.Add(string.Format("{0} ({1})", node.Name, node.IpAddress));
-				_currentConfig.ComputerCredentials.Add(new NetworkComputerCredential(node.IpAddress, node.Username, node.Password)
+				_currentConfig.ComputerCredentials.Add(new NetworkComputerCredential(node.IpAddress, node.Username, node.Password, node.SearchMode)
 				{
 					IsConnected = node.IsConnected,
-					CustomDirectories = new List<string>(node.CustomDirectories)
+					CustomDirectories = new List<string>(node.CustomDirectories),
+					SearchMode = node.SearchMode
 				});
 			}
 			ConfigManager.SaveConfig(_currentConfig);
@@ -2165,8 +3097,8 @@ namespace CertHarvester
 			if (_labelMetricTotalTitle != null)
 			{
 				_labelMetricTotalTitle.Text = string.IsNullOrEmpty(_selectedComputerFilter)
-					? "всего в сети"
-					: string.Format("найдено на {0}", _selectedComputerFilter);
+					? "Всего в сети"
+					: string.Format("Найдено на {0}", _selectedComputerFilter);
 			}
 		}
 
@@ -2470,6 +3402,10 @@ namespace CertHarvester
 		private void OpenDeviceManagementWindow(int initialTab = 0)
 		{
 			HcWindow window = new HcWindow();
+			if (this.Icon != null)
+			{
+				window.Icon = this.Icon;
+			}
 			window.Title = "Управление устройствами";
 			window.Width = 940;
 			window.Height = 680;
@@ -2990,20 +3926,71 @@ namespace CertHarvester
 
 					StackPanel dirsStack = new StackPanel();
 					DockPanel dirsHeader = new DockPanel();
-					StackPanel dirsTitleRow = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
-					System.Windows.Controls.Image dirsFolderImg = LucideIcons.CreateWpfImage("folder", 12, textSecondary);
-					dirsFolderImg.Margin = new Thickness(0, 0, 6, 0);
-					dirsTitleRow.Children.Add(dirsFolderImg);
+					StackPanel dirsTitleRow = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+					System.Windows.Controls.Image searchModeIcon = LucideIcons.CreateWpfImage("search", 12, textSecondary);
+					searchModeIcon.Margin = new Thickness(0, 0, 6, 0);
+					dirsTitleRow.Children.Add(searchModeIcon);
 
 					TextBlock dirsTitle = new TextBlock()
 					{
-						Text = "Папки поиска сертификатов:",
+						Text = "Поиск:",
 						FontSize = 10,
 						FontWeight = FontWeights.SemiBold,
 						Foreground = textSecondary,
-						VerticalAlignment = VerticalAlignment.Center
+						VerticalAlignment = VerticalAlignment.Center,
+						Margin = new Thickness(0, 0, 6, 0)
 					};
 					dirsTitleRow.Children.Add(dirsTitle);
+
+					Border modeSegmentBorder = new Border()
+					{
+						Background = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(15, 23, 42)) : new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+						CornerRadius = new CornerRadius(5),
+						Padding = new Thickness(2),
+						VerticalAlignment = VerticalAlignment.Center
+					};
+					StackPanel modeSegmentStack = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+
+					System.Windows.Controls.Button btnModeAll = new System.Windows.Controls.Button()
+					{
+						Height = 22,
+						Padding = new Thickness(8, 0, 8, 0),
+						BorderThickness = new Thickness(0),
+						Cursor = System.Windows.Input.Cursors.Hand,
+						FontSize = 10,
+						ToolTip = "Общий поиск: опрос стандартных хранилищ, реестра, СКЗИ и всех заданных папок"
+					};
+					HandyControl.Controls.BorderElement.SetCornerRadius(btnModeAll, new CornerRadius(3));
+
+					System.Windows.Controls.Button btnModeStandard = new System.Windows.Controls.Button()
+					{
+						Height = 22,
+						Padding = new Thickness(8, 0, 8, 0),
+						Margin = new Thickness(2, 0, 2, 0),
+						BorderThickness = new Thickness(0),
+						Cursor = System.Windows.Input.Cursors.Hand,
+						FontSize = 10,
+						ToolTip = "Стандартные пути: поиск только в системных хранилищах Windows, реестре и ключевых контейнерах СКЗИ"
+					};
+					HandyControl.Controls.BorderElement.SetCornerRadius(btnModeStandard, new CornerRadius(3));
+
+					System.Windows.Controls.Button btnModeCustom = new System.Windows.Controls.Button()
+					{
+						Height = 22,
+						Padding = new Thickness(8, 0, 8, 0),
+						BorderThickness = new Thickness(0),
+						Cursor = System.Windows.Input.Cursors.Hand,
+						FontSize = 10,
+						ToolTip = "Кастомные пути: поиск только в указанных индивидуальных папках на данном ПК"
+					};
+					HandyControl.Controls.BorderElement.SetCornerRadius(btnModeCustom, new CornerRadius(3));
+
+					modeSegmentStack.Children.Add(btnModeAll);
+					modeSegmentStack.Children.Add(btnModeStandard);
+					modeSegmentStack.Children.Add(btnModeCustom);
+					modeSegmentBorder.Child = modeSegmentStack;
+					dirsTitleRow.Children.Add(modeSegmentBorder);
+
 					DockPanel.SetDock(dirsTitleRow, System.Windows.Controls.Dock.Left);
 					dirsHeader.Children.Add(dirsTitleRow);
 
@@ -3011,13 +3998,14 @@ namespace CertHarvester
 					{
 						Height = 22,
 						Padding = new Thickness(8, 0, 8, 0),
-						Background = new SolidColorBrush(Color.FromRgb(2, 132, 199)),
+						Background = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
 						Foreground = Brushes.White,
 						FontSize = 10,
 						FontWeight = FontWeights.SemiBold,
 						Cursor = System.Windows.Input.Cursors.Hand,
 						HorizontalAlignment = HorizontalAlignment.Right
 					};
+					HandyControl.Controls.BorderElement.SetCornerRadius(btnAddDirToNode, new CornerRadius(4));
 					LucideIcons.ApplyToButton(btnAddDirToNode, "plus", "Добавить папку...", 11, Brushes.White, Brushes.White, 5, FontWeights.SemiBold);
 					DockPanel.SetDock(btnAddDirToNode, System.Windows.Controls.Dock.Right);
 					dirsHeader.Children.Add(btnAddDirToNode);
@@ -3098,19 +4086,102 @@ namespace CertHarvester
 
 					WrapPanel dirsListWrap = new WrapPanel() { Margin = new Thickness(0, 4, 0, 0) };
 					Action renderNodeDirs = null;
+					Action updateModeButtons = null;
+
+					updateModeButtons = () =>
+					{
+						bool isAll = string.IsNullOrEmpty(node.SearchMode) || string.Equals(node.SearchMode, "All", StringComparison.OrdinalIgnoreCase);
+						bool isStd = string.Equals(node.SearchMode, "Standard", StringComparison.OrdinalIgnoreCase);
+						bool isCust = string.Equals(node.SearchMode, "Custom", StringComparison.OrdinalIgnoreCase);
+
+						SolidColorBrush activeBg = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+						SolidColorBrush activeFg = Brushes.White;
+						SolidColorBrush inactiveBg = Brushes.Transparent;
+						SolidColorBrush inactiveFg = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(148, 163, 184)) : new SolidColorBrush(Color.FromRgb(100, 116, 139));
+
+						btnModeAll.Background = isAll ? activeBg : inactiveBg;
+						LucideIcons.ApplyToButton(btnModeAll, "search", "Общий поиск", 10, isAll ? activeFg : inactiveFg, isAll ? activeFg : inactiveFg, 5, isAll ? FontWeights.Bold : FontWeights.Normal);
+
+						btnModeStandard.Background = isStd ? activeBg : inactiveBg;
+						LucideIcons.ApplyToButton(btnModeStandard, "settings", "Стандартные пути", 10, isStd ? activeFg : inactiveFg, isStd ? activeFg : inactiveFg, 5, isStd ? FontWeights.Bold : FontWeights.Normal);
+
+						btnModeCustom.Background = isCust ? activeBg : inactiveBg;
+						LucideIcons.ApplyToButton(btnModeCustom, "folder", "Кастомные пути", 10, isCust ? activeFg : inactiveFg, isCust ? activeFg : inactiveFg, 5, isCust ? FontWeights.Bold : FontWeights.Normal);
+
+						btnAddDirToNode.Visibility = Visibility.Visible;
+						btnAddDirToNode.IsEnabled = !isStd;
+						btnAddDirToNode.Opacity = isStd ? 0.45 : 1.0;
+						btnAddDirToNode.ToolTip = isStd 
+							? "Добавление папок отключено в режиме «Стандартные пути»" 
+							: "Добавить новую папку поиска на данном компьютере";
+
+						if (isStd && addDirInputGrid.Visibility == Visibility.Visible)
+						{
+							addDirInputGrid.Visibility = Visibility.Collapsed;
+							txtDirError.Visibility = Visibility.Collapsed;
+						}
+					};
+
+					btnModeAll.Click += (s2, e2) =>
+					{
+						node.SearchMode = "All";
+						updateModeButtons();
+						renderNodeDirs();
+						SyncAndSaveComputersToConfig();
+						RenderComputersList();
+					};
+
+					btnModeStandard.Click += (s2, e2) =>
+					{
+						node.SearchMode = "Standard";
+						updateModeButtons();
+						renderNodeDirs();
+						SyncAndSaveComputersToConfig();
+						RenderComputersList();
+					};
+
+					btnModeCustom.Click += (s2, e2) =>
+					{
+						node.SearchMode = "Custom";
+						updateModeButtons();
+						renderNodeDirs();
+						SyncAndSaveComputersToConfig();
+						RenderComputersList();
+					};
+
 					renderNodeDirs = () =>
 					{
 						dirsListWrap.Children.Clear();
+
+						bool isStd = string.Equals(node.SearchMode, "Standard", StringComparison.OrdinalIgnoreCase);
+						bool isCust = string.Equals(node.SearchMode, "Custom", StringComparison.OrdinalIgnoreCase);
+
 						if (node.CustomDirectories.Count == 0)
 						{
-							dirsListWrap.Children.Add(new TextBlock()
+							if (isCust)
 							{
-								Text = "Индивидуальные папки не заданы (поиск выполняется в реестре и хранилищах)",
-								FontSize = 9,
-								Foreground = textSecondary,
-								FontStyle = FontStyles.Italic,
-								Margin = new Thickness(0, 2, 0, 2)
-							});
+								dirsListWrap.Children.Add(new TextBlock()
+								{
+									Text = "⚠ Внимание: в режиме «Кастомные пути» папки еще не заданы. Нажмите «+ Добавить папку...» выше.",
+									FontSize = 9.5,
+									Foreground = new SolidColorBrush(Color.FromRgb(251, 191, 36)),
+									FontWeight = FontWeights.SemiBold,
+									Margin = new Thickness(0, 2, 0, 2)
+								});
+							}
+							else
+							{
+								dirsListWrap.Children.Add(new TextBlock()
+								{
+									Text = isStd 
+										? "Индивидуальные папки не заданы (поиск выполняется в стандартных системных хранилищах и реестре)"
+										: "Индивидуальные папки не заданы (поиск выполняется в стандартных системных хранилищах и реестре)",
+									FontSize = 9.5,
+									Foreground = textSecondary,
+									FontStyle = FontStyles.Italic,
+									Margin = new Thickness(0, 2, 0, 2)
+								});
+							}
 							return;
 						}
 
@@ -3119,19 +4190,25 @@ namespace CertHarvester
 							string dirPath = node.CustomDirectories[dIdx];
 							Border dirBadge = new Border()
 							{
-								Background = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(30, 41, 59)) : Brushes.White,
-								BorderBrush = cardBorder,
+								Background = isStd
+									? (_isDarkTheme ? new SolidColorBrush(Color.FromArgb(160, 24, 32, 45)) : new SolidColorBrush(Color.FromRgb(241, 245, 249)))
+									: (_isDarkTheme ? new SolidColorBrush(Color.FromRgb(30, 41, 59)) : Brushes.White),
+								BorderBrush = isStd
+									? (_isDarkTheme ? new SolidColorBrush(Color.FromRgb(45, 55, 72)) : new SolidColorBrush(Color.FromRgb(203, 213, 225)))
+									: cardBorder,
 								BorderThickness = new Thickness(1),
 								CornerRadius = new CornerRadius(3),
 								Padding = new Thickness(6, 2, 6, 2),
-								Margin = new Thickness(0, 0, 6, 4)
+								Margin = new Thickness(0, 0, 6, 4),
+								Opacity = isStd ? 0.55 : 1.0,
+								ToolTip = isStd ? "Директория отключена (в режиме «Стандартные пути» опрашиваются только системные хранилища и реестр)" : null
 							};
 							DockPanel dirBadgeDock = new DockPanel();
 							TextBlock dirText = new TextBlock()
 							{
 								Text = dirPath,
 								FontSize = 10,
-								Foreground = textPrimary,
+								Foreground = isStd ? textSecondary : textPrimary,
 								Margin = new Thickness(0, 0, 6, 0),
 								VerticalAlignment = VerticalAlignment.Center
 							};
@@ -3147,7 +4224,8 @@ namespace CertHarvester
 								Background = Brushes.Transparent,
 								BorderThickness = new Thickness(0),
 								Cursor = System.Windows.Input.Cursors.Hand,
-								ToolTip = "Удалить папку"
+								ToolTip = "Удалить папку",
+								Opacity = isStd ? 0.55 : 1.0
 							};
 							string capturedDir = dirPath;
 							btnRemoveDir.Click += (s2, e2) =>
@@ -3164,6 +4242,8 @@ namespace CertHarvester
 							dirsListWrap.Children.Add(dirBadge);
 						}
 					};
+
+					updateModeButtons();
 
 					Action executeAddDir = () =>
 					{
@@ -3442,7 +4522,7 @@ namespace CertHarvester
 			{
 				Height = 28,
 				Padding = new Thickness(14, 0, 14, 0),
-				Background = new SolidColorBrush(Color.FromRgb(2, 132, 199)),
+				Background = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
 				Foreground = Brushes.White,
 				FontWeight = FontWeights.Bold,
 				FontSize = 11,
@@ -4340,7 +5420,7 @@ namespace CertHarvester
 			else
 			{
 				LucideIcons.ApplyToButton(_buttonStartScan, "play", "Сканировать", 15, Brushes.White, Brushes.White, 8, FontWeights.Bold);
-				_buttonStartScan.Background = new SolidColorBrush(Color.FromRgb(2, 132, 199));
+				_buttonStartScan.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
 				_buttonStartScan.Foreground = Brushes.White;
 				_buttonStartScan.ToolTip = "Запустить сканирование";
 			}
@@ -4407,6 +5487,15 @@ namespace CertHarvester
 				return;
 			}
 
+			if (_textTerminalLog.Document.Blocks.Count == 1)
+			{
+				Paragraph firstPara = _textTerminalLog.Document.Blocks.FirstBlock as Paragraph;
+				if (firstPara != null && firstPara.Inlines.Count == 0)
+				{
+					_textTerminalLog.Document.Blocks.Clear();
+				}
+			}
+
 			Paragraph p = new Paragraph();
 			p.Margin = new Thickness(0, 0, 0, 2);
 			Run run = new Run(message);
@@ -4428,6 +5517,10 @@ namespace CertHarvester
 			bool result = false;
 
 			HcWindow dialog = new HcWindow();
+			if (this.Icon != null)
+			{
+				dialog.Icon = this.Icon;
+			}
 			dialog.Title = title;
 			dialog.Width = 490;
 			dialog.SizeToContent = SizeToContent.Height;
@@ -4551,6 +5644,10 @@ namespace CertHarvester
 			}
 
 			HcWindow dialog = new HcWindow();
+			if (this.Icon != null)
+			{
+				dialog.Icon = this.Icon;
+			}
 			dialog.Title = title;
 			dialog.Width = 460;
 			dialog.SizeToContent = SizeToContent.Height;

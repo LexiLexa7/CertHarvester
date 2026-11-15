@@ -257,6 +257,11 @@ namespace CertHarvester
 		/// </summary>
 		public List<string> CustomDirectories { get; set; }
 
+		/// <summary>
+		/// Режим поиска сертификатов на данном ПК: All (общий поиск), Standard (стандартные пути), Custom (кастомные пути)
+		/// </summary>
+		public string SearchMode { get; set; }
+
 		// Конструктор по умолчанию для инициализации полей
 		public NetworkComputerCredential()
 		{
@@ -265,16 +270,18 @@ namespace CertHarvester
 			Password = string.Empty;
 			IsConnected = false;
 			CustomDirectories = new List<string>();
+			SearchMode = "All";
 		}
 
 		// Параметризованный конструктор для создания записи учетных данных
-		public NetworkComputerCredential(string computerAddress, string username, string password)
+		public NetworkComputerCredential(string computerAddress, string username, string password, string searchMode = "All")
 		{
 			ComputerAddress = computerAddress;
 			Username = username;
 			Password = password;
 			IsConnected = false;
 			CustomDirectories = new List<string>();
+			SearchMode = string.IsNullOrEmpty(searchMode) ? "All" : searchMode;
 		}
 	}
 

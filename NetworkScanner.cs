@@ -227,9 +227,118 @@ namespace CertHarvester
 			}
 		}
 
+		// SMB2 Negotiate Protocol Request (68 байт)
+		private static readonly byte[] Smb2NegotiateRequest = new byte[]
+		{
+			0x00, 0x00, 0x00, 0x44, // NetBIOS session header (длина 68 байт)
+			0xFE, 0x53, 0x4D, 0x42, // ProtocolId: "\xFESMB"
+			0x40, 0x00,             // StructureSize: 64
+			0x00, 0x00,             // CreditCharge: 0
+			0x00, 0x00,             // ChannelSequence: 0
+			0x00, 0x00,             // Reserved
+			0x00, 0x00,             // Command: NEGOTIATE (0)
+			0x00, 0x00,             // CreditsRequested: 0
+			0x00, 0x00, 0x00, 0x00, // Flags: 0
+			0x00, 0x00, 0x00, 0x00, // NextCommand: 0
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // MessageId: 0
+			0x00, 0x00, 0x00, 0x00, // ProcessId: 0
+			0x00, 0x00, 0x00, 0x00, // TreeId: 0
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // SessionId: 0
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Signature
+			// Negotiate Request Body:
+			0x24, 0x00,             // StructureSize: 36
+			0x02, 0x00,             // DialectCount: 2
+			0x01, 0x00,             // SecurityMode: Signing enabled
+			0x00, 0x00,             // Reserved
+			0x00, 0x00, 0x00, 0x00, // Capabilities
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ClientGuid
+			0x70, 0x00, 0x00, 0x00, // ClientStartTime
+			0x02, 0x02,             // Dialect: SMB 2.0.2
+			0x10, 0x02              // Dialect: SMB 2.1
+		};
+
+		// Проверка, является ли адрес локальным хостом (localhost, 127.0.0.1 или собственным IP текущей машины)
+		public static bool IsLocalHostOrLoopback(string hostOrIp)
+		{
+			if (string.IsNullOrWhiteSpace(hostOrIp)) return false;
+			string host = hostOrIp.Trim();
+			if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+			    string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+			    string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase) ||
+			    string.Equals(host, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
+
+			try
+			{
+				IPAddress targetAddr;
+				if (IPAddress.TryParse(host, out targetAddr))
+				{
+					if (IPAddress.IsLoopback(targetAddr)) return true;
+					foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+					{
+						if (ni.OperationalStatus != OperationalStatus.Up) continue;
+						foreach (UnicastIPAddressInformation ip in ni.GetIPProperties().UnicastAddresses)
+						{
+							if (ip.Address.Equals(targetAddr))
+							{
+								return true;
+							}
+						}
+					}
+				}
+			}
+			catch
+			{
+			}
+
+			return false;
+		}
+
+		// Проверка доступности SMB-сервиса (порт 445) с верификацией реального протокольного ответа SMB2
+		public static bool IsSmbPortOpen(string hostOrIp, int timeoutMs = 350)
+		{
+			try
+			{
+				using (TcpClient client = new TcpClient())
+				{
+					IAsyncResult ar = client.BeginConnect(hostOrIp, 445, null, null);
+					bool connected = ar.AsyncWaitHandle.WaitOne(timeoutMs);
+					if (connected && client.Connected)
+					{
+						client.EndConnect(ar);
+						using (NetworkStream stream = client.GetStream())
+						{
+							stream.ReadTimeout = timeoutMs;
+							stream.WriteTimeout = timeoutMs;
+							stream.Write(Smb2NegotiateRequest, 0, Smb2NegotiateRequest.Length);
+							byte[] responseBuf = new byte[64];
+							int bytesRead = stream.Read(responseBuf, 0, responseBuf.Length);
+							// Ответ SMB2 начинается с 4-байтного NetBIOS заголовка и сигнатуры "\xFESMB" (0xFE, 0x53, 0x4D, 0x42)
+							if (bytesRead >= 8 && responseBuf[4] == 0xFE && responseBuf[5] == 0x53 && responseBuf[6] == 0x4D && responseBuf[7] == 0x42)
+							{
+								return true;
+							}
+						}
+					}
+				}
+			}
+			catch
+			{
+			}
+
+			return false;
+		}
+
 		// Проверка доступности TCP-порта (SMB / Удаленный реестр) с коротким таймаутом
 		public static bool IsPortOpen(string ipAddress, int port = 445, int timeoutMs = 300)
 		{
+			if (port == 445)
+			{
+				return IsSmbPortOpen(ipAddress, timeoutMs);
+			}
+
 			try
 			{
 				using (TcpClient client = new TcpClient())
@@ -362,6 +471,10 @@ namespace CertHarvester
 				cleanHost = cleanHost.Substring(0, slashIdx);
 			}
 
+			// 1. Проверка SMB порта 445 с реальным протокольным рукопожатием SMB2
+			isSmbOpen = IsSmbPortOpen(cleanHost, portTimeoutMs);
+
+			// 2. Проверка ICMP Ping
 			bool pingOk = false;
 			try
 			{
@@ -373,7 +486,15 @@ namespace CertHarvester
 					if (reply != null && reply.Status == IPStatus.Success)
 					{
 						pingOk = true;
-						pingMs = reply.RoundtripTime > 0 ? reply.RoundtripTime : sw.ElapsedMilliseconds;
+						pingMs = reply.RoundtripTime;
+
+						// Защита от виртуальных TUN/VPN адаптеров (sing-box, clash, tun2socks и др.),
+						// которые локально перехватывают ICMP и мгновенно возвращают ответ за 0 мс для любых несуществующих IP
+						if (reply.RoundtripTime == 0 && !IsLocalHostOrLoopback(cleanHost) && !isSmbOpen)
+						{
+							pingOk = false;
+							pingMs = 0;
+						}
 					}
 				}
 			}
@@ -381,19 +502,12 @@ namespace CertHarvester
 			{
 			}
 
-			// Проверка SMB порта 445 для детекции Windows-машин
-			isSmbOpen = IsPortOpen(cleanHost, 445, portTimeoutMs);
-
-			if (pingOk || isSmbOpen)
+			if (!pingOk)
 			{
-				if (pingMs == 0)
-				{
-					pingMs = 1;
-				}
-				return true;
+				pingMs = 0;
 			}
 
-			return false;
+			return isSmbOpen || pingOk;
 		}
 
 		// Асинхронное параллельное обнаружение активных компьютеров в подсети с фильтрацией Windows

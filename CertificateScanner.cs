@@ -626,19 +626,30 @@ namespace CertHarvester
 				}
 			}
 
+			// Определение режима поиска сертификатов для данного узла (All, Standard, Custom)
+			string searchMode = (targetCred != null && !string.IsNullOrEmpty(targetCred.SearchMode)) ? targetCred.SearchMode : "All";
+			bool scanStandard = !string.Equals(searchMode, "Custom", StringComparison.OrdinalIgnoreCase);
+			bool scanCustom = !string.Equals(searchMode, "Standard", StringComparison.OrdinalIgnoreCase);
+
 			bool isLocal = IsLocalComputer(cleanHost);
 			if (isLocal == true)
 			{
-				Logger.LogInfo("Сетевой узел " + cleanHost + " является локальным компьютером. Выполняется сканирование локальных хранилищ и реестра");
-				ScanWindowsCertificateStores(cleanHost, records);
-
-				for (int d = 0; d < targetCustomDirs.Count; d++)
+				Logger.LogInfo("Сетевой узел " + cleanHost + " является локальным компьютером. Режим поиска: " + searchMode);
+				if (scanStandard)
 				{
-					string localDir = targetCustomDirs[d];
-					if (!string.IsNullOrWhiteSpace(localDir) && Directory.Exists(localDir))
+					ScanWindowsCertificateStores(cleanHost, records);
+				}
+
+				if (scanCustom)
+				{
+					for (int d = 0; d < targetCustomDirs.Count; d++)
 					{
-						Logger.LogInfo("Сканирование индивидуального каталога сертификатов: " + localDir);
-						ScanDirectoryRecursive(localDir, cleanHost, records);
+						string localDir = targetCustomDirs[d];
+						if (!string.IsNullOrWhiteSpace(localDir) && Directory.Exists(localDir))
+						{
+							Logger.LogInfo("Сканирование индивидуального каталога сертификатов: " + localDir);
+							ScanDirectoryRecursive(localDir, cleanHost, records);
+						}
 					}
 				}
 				return;
@@ -676,13 +687,30 @@ namespace CertHarvester
 				}
 
 				// 1. Полнофункциональный поиск и выгрузка сертификатов из реестра удаленного ПК (Remote Registry API и WMI)
-				DownloadCertificatesFromRemoteRegistry(currentTargetHost, computerLocalDirectory, downloadedFilePaths);
+				if (scanStandard)
+				{
+					DownloadCertificatesFromRemoteRegistry(currentTargetHost, computerLocalDirectory, downloadedFilePaths);
 
-				// 2. Подключение к системным каталогам и ключевым контейнерам СКЗИ КриптоПро удаленного ПК по сетевым UNC-путям
-				DownloadCertificatesFromRemoteUncSystemStores(currentTargetHost, computerLocalDirectory, downloadedFilePaths);
+					// 2. Подключение к системным каталогам и ключевым контейнерам СКЗИ КриптоПро удаленного ПК по сетевым UNC-путям
+					DownloadCertificatesFromRemoteUncSystemStores(currentTargetHost, computerLocalDirectory, downloadedFilePaths);
+				}
 
-				// 3. Подключение к пользовательским и общедоступным директориям удаленного ПК по UNC и скачивание .cer/.crt
-				DownloadCertificatesFromRemoteUncShares(currentTargetHost, targetCustomDirs, computerLocalDirectory, downloadedFilePaths);
+				// 3. Подключение к директориям удаленного ПК по UNC и скачивание .cer/.crt
+				if (scanCustom && scanStandard)
+				{
+					// Общий поиск: и стандартные сетевые папки, и кастомные директории
+					DownloadCertificatesFromRemoteUncShares(currentTargetHost, targetCustomDirs, computerLocalDirectory, downloadedFilePaths, onlyCustomPaths: false);
+				}
+				else if (scanCustom && !scanStandard)
+				{
+					// Только кастомные пути: исключительно переданные targetCustomDirs
+					DownloadCertificatesFromRemoteUncShares(currentTargetHost, targetCustomDirs, computerLocalDirectory, downloadedFilePaths, onlyCustomPaths: true);
+				}
+				else if (!scanCustom && scanStandard)
+				{
+					// Только стандартные пути: только стандартные общие ресурсы, без кастомных путей
+					DownloadCertificatesFromRemoteUncShares(currentTargetHost, null, computerLocalDirectory, downloadedFilePaths, onlyCustomPaths: false);
+				}
 
 				// Если с текущего адреса удалось выгрузить сертификаты, прекращаем перебор альтернативных адресов этого ПК
 				if (downloadedFilePaths.Count > 0)
@@ -1733,16 +1761,19 @@ namespace CertHarvester
 		}
 
 		// Подключение к пользовательским сетевым папкам и UNC-ресурсам удаленного ПК и скачивание сертификатов
-		public static void DownloadCertificatesFromRemoteUncShares(string cleanHost, List<string> configuredPaths, string targetLocalDir, List<string> downloadedPaths)
+		public static void DownloadCertificatesFromRemoteUncShares(string cleanHost, List<string> configuredPaths, string targetLocalDir, List<string> downloadedPaths, bool onlyCustomPaths = false)
 		{
 			try
 			{
 				List<string> candidateSharePaths = new List<string>();
-				candidateSharePaths.Add(string.Format(@"\\{0}\c$\Certificates", cleanHost));
-				candidateSharePaths.Add(string.Format(@"\\{0}\c$\Certs", cleanHost));
-				candidateSharePaths.Add(string.Format(@"\\{0}\Certificates", cleanHost));
-				candidateSharePaths.Add(string.Format(@"\\{0}\c$\CryptoPro\Certs", cleanHost));
-				candidateSharePaths.Add(string.Format(@"\\{0}\c$\Users\Public", cleanHost));
+				if (!onlyCustomPaths)
+				{
+					candidateSharePaths.Add(string.Format(@"\\{0}\c$\Certificates", cleanHost));
+					candidateSharePaths.Add(string.Format(@"\\{0}\c$\Certs", cleanHost));
+					candidateSharePaths.Add(string.Format(@"\\{0}\Certificates", cleanHost));
+					candidateSharePaths.Add(string.Format(@"\\{0}\c$\CryptoPro\Certs", cleanHost));
+					candidateSharePaths.Add(string.Format(@"\\{0}\c$\Users\Public", cleanHost));
+				}
 
 				if (configuredPaths != null)
 				{
