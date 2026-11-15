@@ -4,10 +4,10 @@ CertHarvester — приложение для автоматизированно
 
 ## Способ установки
 
-- **На главном компьюетере:** установить программу с помощью установочного файла
-- **На сканируемых компьютерах:** в powershell от имени администратора вписать данный код
-- ```
-  bashSet-Service -Name RemoteRegistry -StartupType Automatic; Start-Service -Name RemoteRegistry; reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f; netsh advfirewall firewall set rule group="File and Printer Sharing" new enable=Yes; netsh advfirewall firewall set rule group="Общий доступ к файлам и принтерам" new enable=Yes
+**На главном компьюетере:** установить программу с помощью установочного файла
+**На сканируемых компьютерах:** в powershell от имени администратора вписать данный код
+ ```bash
+  Set-Service -Name RemoteRegistry -StartupType Automatic; Start-Service -Name RemoteRegistry; reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f; netsh advfirewall firewall set rule group="File and Printer Sharing" new enable=Yes; netsh advfirewall firewall set rule group="Общий доступ к файлам и принтерам" new enable=Yes
   ```
   для того чтобы с главного компьютера был доступ к реестру с сертифекатами либо запустить .bat файл от имени администратора с готовым кодом.
 
