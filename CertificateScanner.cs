@@ -664,6 +664,16 @@ namespace CertHarvester
 				string currentTargetHost = candidates[candIdx];
 				Logger.LogInfo("Попытка сбора сертификатов с удаленного ПК: " + currentTargetHost + " (" + cleanHost + ")");
 
+				// Экспресс-проверка сетевой доступности узла (Ping + SMB порт 445) с быстрым таймаутом
+				long pingMs;
+				bool isSmbOpen;
+				bool isReachable = NetworkScanner.CheckHostQuick(currentTargetHost, 400, 300, out pingMs, out isSmbOpen);
+				if (!isReachable)
+				{
+					Logger.LogWarning(string.Format("Сетевой узел {0} недоступен по сети (ICMP и SMB 445 не отвечают), пропуск сканирования", currentTargetHost));
+					continue;
+				}
+
 				// Установление аутентифицированной сессии net use перед подключением к реестру и ресурсам
 				if (targetCred != null && !string.IsNullOrWhiteSpace(targetCred.Username))
 				{

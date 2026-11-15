@@ -2068,8 +2068,6 @@ namespace CertHarvester
 			headerTemplate.VisualTree = headerTextFactory;
 			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.ContentTemplateProperty, headerTemplate));
 
-			headerStyle.Setters.Add(new EventSetter(UIElement.MouseEnterEvent, new MouseEventHandler(OnColumnHeaderMouseEnter)));
-			headerStyle.Setters.Add(new EventSetter(UIElement.MouseMoveEvent, new MouseEventHandler(OnColumnHeaderMouseMove)));
 			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.ToolTipProperty, " "));
 			headerStyle.Setters.Add(new EventSetter(ToolTipService.ToolTipOpeningEvent, new ToolTipEventHandler(OnColumnHeaderToolTipOpening)));
 			_gridCertificates.ColumnHeaderStyle = headerStyle;
@@ -2123,8 +2121,6 @@ namespace CertHarvester
 			textColStyle.Setters.Add(new Setter(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis));
 			textColStyle.Setters.Add(new Setter(ToolTipService.InitialShowDelayProperty, 250));
 			textColStyle.Setters.Add(new Setter(ToolTipService.BetweenShowDelayProperty, 100));
-			textColStyle.Setters.Add(new EventSetter(UIElement.MouseEnterEvent, new MouseEventHandler(OnCellTextBlockMouseEnter)));
-			textColStyle.Setters.Add(new EventSetter(UIElement.MouseMoveEvent, new MouseEventHandler(OnCellTextBlockMouseMove)));
 			textColStyle.Setters.Add(new Setter(TextBlock.ToolTipProperty, " "));
 			textColStyle.Setters.Add(new EventSetter(ToolTipService.ToolTipOpeningEvent, new ToolTipEventHandler(OnCellTextBlockToolTipOpening)));
 
@@ -2189,113 +2185,38 @@ namespace CertHarvester
 			title.Foreground = titleColor;
 		}
 
-		// Обработчик наведения мыши на заголовок колонки таблицы
-		private void OnColumnHeaderMouseEnter(object sender, MouseEventArgs e)
+		// Вспомогательный метод поиска дочернего элемента заданного типа в визуальном дереве WPF
+		private static T FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
 		{
-			UpdateColumnHeaderToolTip(sender as DataGridColumnHeader);
+			if (parent == null) return null;
+			int childCount = VisualTreeHelper.GetChildrenCount(parent);
+			for (int i = 0; i < childCount; i++)
+			{
+				DependencyObject child = VisualTreeHelper.GetChild(parent, i);
+				if (child is T typedChild)
+				{
+					return typedChild;
+				}
+				T childOfChild = FindVisualChild<T>(child);
+				if (childOfChild != null)
+				{
+					return childOfChild;
+				}
+			}
+			return null;
 		}
 
-		// Обработчик движения мыши по заголовку колонки (на случай изменения ширины колонок)
-		private void OnColumnHeaderMouseMove(object sender, MouseEventArgs e)
-		{
-			UpdateColumnHeaderToolTip(sender as DataGridColumnHeader);
-		}
-
-		// Динамическое отображение ToolTip для заголовка колонки, если текст не помещается полностью
-		private void UpdateColumnHeaderToolTip(DataGridColumnHeader header)
-		{
-			if (header == null || header.Content == null || header.ActualWidth <= 0)
-			{
-				if (header != null) header.ToolTip = null;
-				return;
-			}
-
-			string fullText = header.Content.ToString();
-			if (string.IsNullOrEmpty(fullText))
-			{
-				header.ToolTip = null;
-				return;
-			}
-
-			string baseTitle = header.Column != null ? GetBaseColumnTitle(header.Column.SortMemberPath) : fullText;
-			if (string.IsNullOrEmpty(baseTitle))
-			{
-				baseTitle = fullText;
-			}
-
-			Typeface typeface = new Typeface(header.FontFamily, header.FontStyle, header.FontWeight, header.FontStretch);
-			FormattedText ft = new FormattedText(
-				fullText,
-				System.Globalization.CultureInfo.CurrentCulture,
-				FlowDirection.LeftToRight,
-				typeface,
-				header.FontSize,
-				Brushes.Black
-			);
-
-			double availableWidth = header.ActualWidth - header.Padding.Left - header.Padding.Right - 6.0;
-			if (ft.Width > availableWidth)
-			{
-				header.ToolTip = baseTitle;
-			}
-			else
-			{
-				header.ToolTip = null;
-			}
-		}
-
-		// Обработчик наведения мыши на текстовую ячейку таблицы
-		private void OnCellTextBlockMouseEnter(object sender, MouseEventArgs e)
-		{
-			UpdateCellTextBlockToolTip(sender as TextBlock);
-		}
-
-		// Обработчик движения мыши по ячейке таблицы
-		private void OnCellTextBlockMouseMove(object sender, MouseEventArgs e)
-		{
-			UpdateCellTextBlockToolTip(sender as TextBlock);
-		}
-
-		// Динамическое отображение ToolTip для текстовой ячейки, если текст обрезан многоточием
-		private void UpdateCellTextBlockToolTip(TextBlock tb)
-		{
-			if (tb == null || string.IsNullOrEmpty(tb.Text) || tb.ActualWidth <= 0)
-			{
-				if (tb != null) tb.ToolTip = null;
-				return;
-			}
-
-			Typeface typeface = new Typeface(tb.FontFamily, tb.FontStyle, tb.FontWeight, tb.FontStretch);
-			FormattedText ft = new FormattedText(
-				tb.Text,
-				System.Globalization.CultureInfo.CurrentCulture,
-				FlowDirection.LeftToRight,
-				typeface,
-				tb.FontSize,
-				Brushes.Black
-			);
-
-			if (ft.Width > tb.ActualWidth + 1.0)
-			{
-				tb.ToolTip = tb.Text;
-			}
-			else
-			{
-				tb.ToolTip = null;
-			}
-		}
-
-		// Обработчик события открытия всплывающей подсказки для заголовка колонки (показывает ToolTip только если текст обрезан)
+		// Обработчик события открытия всплывающей подсказки для заголовка колонки (показывает ToolTip, только если текст обрезан или не влезает)
 		private void OnColumnHeaderToolTipOpening(object sender, ToolTipEventArgs e)
 		{
 			DataGridColumnHeader header = sender as DataGridColumnHeader;
-			if (header == null || header.Content == null || header.ActualWidth <= 0)
+			if (header == null)
 			{
 				e.Handled = true;
 				return;
 			}
 
-			string fullText = header.Content.ToString();
+			string fullText = header.Content != null ? header.Content.ToString() : null;
 			if (string.IsNullOrEmpty(fullText))
 			{
 				e.Handled = true;
@@ -2308,20 +2229,47 @@ namespace CertHarvester
 				baseTitle = fullText;
 			}
 
-			Typeface typeface = new Typeface(header.FontFamily, header.FontStyle, header.FontWeight, header.FontStretch);
-			FormattedText ft = new FormattedText(
-				fullText,
-				System.Globalization.CultureInfo.CurrentCulture,
-				FlowDirection.LeftToRight,
-				typeface,
-				header.FontSize,
-				Brushes.Black
-			);
+			header.ToolTip = baseTitle;
 
-			double availableWidth = header.ActualWidth - header.Padding.Left - header.Padding.Right - 6.0;
-			if (ft.Width > availableWidth)
+			bool isTrimmed = false;
+			TextBlock tb = FindVisualChild<TextBlock>(header);
+			if (tb != null && tb.ActualWidth > 0)
 			{
-				header.ToolTip = baseTitle;
+				Typeface typeface = new Typeface(tb.FontFamily, tb.FontStyle, tb.FontWeight, tb.FontStretch);
+				FormattedText ft = new FormattedText(
+					tb.Text,
+					System.Globalization.CultureInfo.CurrentCulture,
+					FlowDirection.LeftToRight,
+					typeface,
+					tb.FontSize,
+					Brushes.Black
+				);
+				if (ft.Width > tb.ActualWidth + 1.0)
+				{
+					isTrimmed = true;
+				}
+			}
+			else
+			{
+				Typeface typeface = new Typeface(header.FontFamily ?? new FontFamily("Segoe UI"), header.FontStyle, header.FontWeight, header.FontStretch);
+				FormattedText ft = new FormattedText(
+					fullText,
+					System.Globalization.CultureInfo.CurrentCulture,
+					FlowDirection.LeftToRight,
+					typeface,
+					header.FontSize > 0 ? header.FontSize : 12.0,
+					Brushes.Black
+				);
+				double colWidth = (header.Column != null && header.Column.ActualWidth > 0) ? header.Column.ActualWidth : header.ActualWidth;
+				double available = colWidth - header.Padding.Left - header.Padding.Right - 8.0;
+				if (colWidth > 0 && ft.Width > available)
+				{
+					isTrimmed = true;
+				}
+			}
+
+			if (isTrimmed)
+			{
 				e.Handled = false;
 			}
 			else
@@ -2340,6 +2288,8 @@ namespace CertHarvester
 				return;
 			}
 
+			tb.ToolTip = tb.Text;
+
 			Typeface typeface = new Typeface(tb.FontFamily, tb.FontStyle, tb.FontWeight, tb.FontStretch);
 			FormattedText ft = new FormattedText(
 				tb.Text,
@@ -2352,7 +2302,6 @@ namespace CertHarvester
 
 			if (ft.Width > tb.ActualWidth + 1.0)
 			{
-				tb.ToolTip = tb.Text;
 				e.Handled = false;
 			}
 			else
@@ -2715,7 +2664,8 @@ namespace CertHarvester
 				if (node.IsOnline == true)
 				{
 					onlineIndicator.Background = new SolidColorBrush(Color.FromRgb(16, 185, 129));
-					onlineIndicator.ToolTip = string.Format("Узел доступен в сети (Ping{0})", node.PingTimeMs.HasValue ? string.Format(": {0} мс", node.PingTimeMs.Value) : " OK");
+					string pingTip = node.PingTimeMs.HasValue ? (node.PingTimeMs.Value <= 0 ? ": < 1 мс" : string.Format(": {0} мс", node.PingTimeMs.Value)) : " OK";
+					onlineIndicator.ToolTip = string.Format("Узел доступен в сети (Ping{0})", pingTip);
 				}
 				else if (node.IsOnline == false)
 				{
@@ -2779,7 +2729,7 @@ namespace CertHarvester
 					});
 
 					node.IsOnline = isAlive;
-					node.PingTimeMs = pingMs;
+					node.PingTimeMs = pingMs >= 0 ? pingMs : (long?)null;
 					node.IsSmbOpen = isSmbOpen;
 
 					if (isAlive)
@@ -2788,7 +2738,9 @@ namespace CertHarvester
 						{
 							node.Status = node.IsConnected ? "Готово" : "В очереди";
 						}
-						string pingInfo = pingMs > 0 ? string.Format("{0} мс", pingMs) : (NetworkScanner.IsLocalHostOrLoopback(node.IpAddress) ? "< 1 мс" : "нет ответа");
+						string pingInfo = pingMs >= 0 
+							? (pingMs == 0 ? "< 1 мс" : string.Format("{0} мс", pingMs)) 
+							: "нет ответа";
 						AppendTerminalLog(string.Format("{0} - Быстрая проверка {1} ({2}): узел доступен (Ping: {3}, SMB 445: {4})", 
 							DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, node.IpAddress, pingInfo, isSmbOpen ? "открыт" : "закрыт"), Color.FromRgb(52, 211, 153));
 					}
@@ -2835,7 +2787,8 @@ namespace CertHarvester
 				string ipDisplay = node.IpAddress;
 				if (node.IsOnline == true && node.PingTimeMs.HasValue)
 				{
-					ipDisplay = string.Format("{0}  •  {1} мс", node.IpAddress, node.PingTimeMs.Value);
+					string pingText = node.PingTimeMs.Value <= 0 ? "< 1 мс" : string.Format("{0} мс", node.PingTimeMs.Value);
+					ipDisplay = string.Format("{0}  •  {1}", node.IpAddress, pingText);
 				}
 				TextBlock ipBlock = new TextBlock() { Text = ipDisplay, FontSize = 10, Foreground = ipText };
 				textStack.Children.Add(nameBlock);
@@ -3734,7 +3687,7 @@ namespace CertHarvester
 						};
 						pingBadge.Child = new TextBlock()
 						{
-							Text = node.PingTimeMs.Value + " мс",
+							Text = node.PingTimeMs.Value <= 0 ? "< 1 мс" : node.PingTimeMs.Value + " мс",
 							FontSize = 9,
 							Foreground = _isDarkTheme ? new SolidColorBrush(Color.FromRgb(147, 197, 253)) : new SolidColorBrush(Color.FromRgb(30, 58, 138)),
 							FontWeight = FontWeights.SemiBold
@@ -5254,6 +5207,57 @@ namespace CertHarvester
 		}
 
 		// Запуск или остановка процедуры сканирования СКЗИ одной кнопкой
+		// Слияние найденных сертификатов с общим списком для предотвращения дублирования
+		private void MergeCertificates(List<CertificateRecord> incomingCerts, ref int newlyAdded, ref int updatedExisting)
+		{
+			if (incomingCerts == null || incomingCerts.Count == 0) return;
+
+			for (int s = 0; s < incomingCerts.Count; s++)
+			{
+				CertificateRecord foundCert = incomingCerts[s];
+				bool alreadyExists = false;
+
+				for (int ex = 0; ex < _allCertificates.Count; ex++)
+				{
+					if (string.Equals(_allCertificates[ex].SerialNumber, foundCert.SerialNumber, StringComparison.OrdinalIgnoreCase))
+					{
+						_allCertificates[ex].UpdatedAt = DateTime.Now;
+						_allCertificates[ex].OwnerName = foundCert.OwnerName;
+						_allCertificates[ex].IssuerName = foundCert.IssuerName;
+						_allCertificates[ex].CryptoProVersion = foundCert.CryptoProVersion;
+						_allCertificates[ex].HasEmbeddedLicense = foundCert.HasEmbeddedLicense;
+
+						if (foundCert.Locations != null && foundCert.Locations.Count > 0)
+						{
+							for (int l = 0; l < foundCert.Locations.Count; l++)
+							{
+								CertificateLocationRecord loc = foundCert.Locations[l];
+								_allCertificates[ex].AddLocation(loc.MachineName, loc.MachineIp, loc.SourcePath, loc.LastSeenAt);
+							}
+						}
+						else
+						{
+							_allCertificates[ex].AddLocation(foundCert.MachineName, foundCert.MachineIp, foundCert.SourcePath);
+						}
+
+						alreadyExists = true;
+						updatedExisting++;
+						break;
+					}
+				}
+
+				if (!alreadyExists)
+				{
+					if (foundCert.Locations == null || foundCert.Locations.Count == 0)
+					{
+						foundCert.AddLocation(foundCert.MachineName, foundCert.MachineIp, foundCert.SourcePath);
+					}
+					_allCertificates.Add(foundCert);
+					newlyAdded++;
+				}
+			}
+		}
+
 		private async void ButtonStartScan_Click(object sender, RoutedEventArgs e)
 		{
 			if (_isScanningActive == true)
@@ -5273,8 +5277,36 @@ namespace CertHarvester
 
 			try
 			{
-				int totalNodes = _networkNodes.Count;
+				SyncAndSaveComputersToConfig();
+				CertificateScanner.ActiveConfig = _currentConfig;
 
+				int totalNodes = _networkNodes.Count;
+				int newlyAdded = 0;
+				int updatedExisting = 0;
+
+				// 1. Сканирование локальных папок, если добавлены в конфигурацию
+				if (_currentConfig.ScanDirectories != null && _currentConfig.ScanDirectories.Count > 0)
+				{
+					_labelProgressCurrentNode.Text = "Сканирование локальных каталогов...";
+					List<CertificateRecord> dirCerts = await Task.Run(() =>
+					{
+						List<CertificateRecord> recs = new List<CertificateRecord>();
+						for (int d = 0; d < _currentConfig.ScanDirectories.Count; d++)
+						{
+							string dirPath = _currentConfig.ScanDirectories[d];
+							if (!string.IsNullOrWhiteSpace(dirPath) && Directory.Exists(dirPath))
+							{
+								CertificateScanner.ScanDirectoryRecursive(dirPath, Environment.MachineName, recs);
+							}
+						}
+						return recs;
+					});
+
+					MergeCertificates(dirCerts, ref newlyAdded, ref updatedExisting);
+					RefreshCertificatesGrid();
+				}
+
+				// 2. Реальное последовательное сканирование настроенных узлов сети
 				for (int i = 0; i < totalNodes; i++)
 				{
 					if (_scanCts.IsCancellationRequested)
@@ -5287,74 +5319,48 @@ namespace CertHarvester
 					RenderComputersList();
 
 					double prog = ((i + 1) * 100.0) / totalNodes;
-					_labelProgressSummary.Text = string.Format("Проверено: {0} из {1} ПК", i, totalNodes);
+					_labelProgressSummary.Text = string.Format("Проверено: {0} из {1} ПК", i + 1, totalNodes);
 					_progressBarCustom.Value = prog;
 					_progressBarCustom.Foreground = new SolidColorBrush(Color.FromRgb(14, 165, 233));
 					_labelProgressPercent.Text = ((int)prog) + "%";
-					_labelProgressCurrentNode.Text = string.Format("Сканируется: {0}...", node.Name);
+					_labelProgressCurrentNode.Text = string.Format("Сканируется: {0} ({1})...", node.Name, node.IpAddress);
 
 					AppendTerminalLog(string.Format("{0} - Начато сканирование ПК: {1} ({2})", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, node.IpAddress), Color.FromRgb(156, 163, 175));
 
-					await Task.Delay(400, _scanCts.Token);
+					string compEntry = string.Format("{0} ({1})", node.Name, node.IpAddress);
+					List<CertificateRecord> nodeCerts = await Task.Run(() =>
+					{
+						List<CertificateRecord> recs = new List<CertificateRecord>();
+						CertificateScanner.ScanNetworkComputer(compEntry, _currentConfig.ScanDirectories, recs, _currentConfig.ComputerCredentials);
+						return recs;
+					});
 
-					node.Status = "Готово";
-					AppendTerminalLog(string.Format("{0} - ПК {1} успешно проверен. Сертификаты и СКЗИ обработаны", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name), Color.FromRgb(52, 211, 153));
+					bool isLocal = NetworkScanner.IsLocalHostOrLoopback(node.IpAddress) || CertificateScanner.IsLocalComputer(node.Name);
+					if (nodeCerts.Count > 0)
+					{
+						node.Status = "Готово";
+						node.IsOnline = true;
+						AppendTerminalLog(string.Format("{0} - ПК {1} успешно проверен. Найдено сертификатов: {2}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, nodeCerts.Count), Color.FromRgb(52, 211, 153));
+					}
+					else
+					{
+						if (isLocal)
+						{
+							node.Status = "Готово";
+							node.IsOnline = true;
+							AppendTerminalLog(string.Format("{0} - ПК {1} проверен (сертификатов не обнаружено)", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name), Color.FromRgb(156, 163, 175));
+						}
+						else
+						{
+							node.Status = node.IsOnline == true ? "Готово" : "Недоступен";
+							string statusDesc = node.Status == "Недоступен" ? "узел недоступен по сети" : "сертификатов не обнаружено";
+							AppendTerminalLog(string.Format("{0} - ПК {1} завершил проверку: {2}", DateTime.Now.ToString("dd.MM.yy HH:mm:ss.fff"), node.Name, statusDesc), node.Status == "Недоступен" ? Color.FromRgb(248, 113, 113) : Color.FromRgb(156, 163, 175));
+						}
+					}
+
+					MergeCertificates(nodeCerts, ref newlyAdded, ref updatedExisting);
+					RefreshCertificatesGrid();
 					RenderComputersList();
-				}
-
-				_labelProgressSummary.Text = string.Format("Проверено: {0} из {0} ПК", totalNodes);
-				_progressBarCustom.Value = 100;
-				_labelProgressPercent.Text = "100%";
-				_labelProgressCurrentNode.Text = "Сбор сертификатов и СКЗИ...";
-
-				List<CertificateRecord> scanned = await Task.Run(() => CertificateScanner.ScanAll(_currentConfig));
-
-				int newlyAdded = 0;
-				int updatedExisting = 0;
-
-				for (int s = 0; s < scanned.Count; s++)
-				{
-					CertificateRecord foundCert = scanned[s];
-					bool alreadyExists = false;
-
-					for (int ex = 0; ex < _allCertificates.Count; ex++)
-					{
-						if (string.Equals(_allCertificates[ex].SerialNumber, foundCert.SerialNumber, StringComparison.OrdinalIgnoreCase))
-						{
-							_allCertificates[ex].UpdatedAt = DateTime.Now;
-							_allCertificates[ex].OwnerName = foundCert.OwnerName;
-							_allCertificates[ex].IssuerName = foundCert.IssuerName;
-							_allCertificates[ex].CryptoProVersion = foundCert.CryptoProVersion;
-							_allCertificates[ex].HasEmbeddedLicense = foundCert.HasEmbeddedLicense;
-
-							if (foundCert.Locations != null && foundCert.Locations.Count > 0)
-							{
-								for (int l = 0; l < foundCert.Locations.Count; l++)
-								{
-									CertificateLocationRecord loc = foundCert.Locations[l];
-									_allCertificates[ex].AddLocation(loc.MachineName, loc.MachineIp, loc.SourcePath, loc.LastSeenAt);
-								}
-							}
-							else
-							{
-								_allCertificates[ex].AddLocation(foundCert.MachineName, foundCert.MachineIp, foundCert.SourcePath);
-							}
-
-							alreadyExists = true;
-							updatedExisting = updatedExisting + 1;
-							break;
-						}
-					}
-
-					if (!alreadyExists)
-					{
-						if (foundCert.Locations == null || foundCert.Locations.Count == 0)
-						{
-							foundCert.AddLocation(foundCert.MachineName, foundCert.MachineIp, foundCert.SourcePath);
-						}
-						_allCertificates.Add(foundCert);
-						newlyAdded = newlyAdded + 1;
-					}
 				}
 
 				_currentConfig.Certificates = _allCertificates;

@@ -304,23 +304,47 @@ namespace CertHarvester
 				using (TcpClient client = new TcpClient())
 				{
 					IAsyncResult ar = client.BeginConnect(hostOrIp, 445, null, null);
-					bool connected = ar.AsyncWaitHandle.WaitOne(timeoutMs);
-					if (connected && client.Connected)
+					bool waited = ar.AsyncWaitHandle.WaitOne(timeoutMs);
+					if (!waited)
+					{
+						return false;
+					}
+
+					try
 					{
 						client.EndConnect(ar);
-						using (NetworkStream stream = client.GetStream())
+					}
+					catch
+					{
+						return false;
+					}
+
+					if (client.Connected)
+					{
+						try
 						{
-							stream.ReadTimeout = timeoutMs;
-							stream.WriteTimeout = timeoutMs;
-							stream.Write(Smb2NegotiateRequest, 0, Smb2NegotiateRequest.Length);
-							byte[] responseBuf = new byte[64];
-							int bytesRead = stream.Read(responseBuf, 0, responseBuf.Length);
-							// Ответ SMB2 начинается с 4-байтного NetBIOS заголовка и сигнатуры "\xFESMB" (0xFE, 0x53, 0x4D, 0x42)
-							if (bytesRead >= 8 && responseBuf[4] == 0xFE && responseBuf[5] == 0x53 && responseBuf[6] == 0x4D && responseBuf[7] == 0x42)
+							using (NetworkStream stream = client.GetStream())
 							{
-								return true;
+								stream.ReadTimeout = Math.Max(250, timeoutMs);
+								stream.WriteTimeout = Math.Max(250, timeoutMs);
+								stream.Write(Smb2NegotiateRequest, 0, Smb2NegotiateRequest.Length);
+								byte[] responseBuf = new byte[64];
+								int bytesRead = stream.Read(responseBuf, 0, responseBuf.Length);
+								// Ответ SMB2 начинается с 4-байтного NetBIOS заголовка и сигнатуры "\xFESMB" (0xFE, 0x53, 0x4D, 0x42) или SMB1 "\xFFSMB"
+								if (bytesRead >= 8 &&
+								    ((responseBuf[4] == 0xFE && responseBuf[5] == 0x53 && responseBuf[6] == 0x4D && responseBuf[7] == 0x42) ||
+								     (responseBuf[4] == 0xFF && responseBuf[5] == 0x53 && responseBuf[6] == 0x4D && responseBuf[7] == 0x42)))
+								{
+									return true;
+								}
 							}
 						}
+						catch
+						{
+							return false;
+						}
+
+						return false;
 					}
 				}
 			}
@@ -344,12 +368,22 @@ namespace CertHarvester
 				using (TcpClient client = new TcpClient())
 				{
 					IAsyncResult ar = client.BeginConnect(ipAddress, port, null, null);
-					bool connected = ar.AsyncWaitHandle.WaitOne(timeoutMs);
-					if (connected && client.Connected)
+					bool waited = ar.AsyncWaitHandle.WaitOne(timeoutMs);
+					if (!waited)
+					{
+						return false;
+					}
+
+					try
 					{
 						client.EndConnect(ar);
-						return true;
 					}
+					catch
+					{
+						return false;
+					}
+
+					return client.Connected;
 				}
 			}
 			catch
@@ -480,20 +514,18 @@ namespace CertHarvester
 			{
 				using (Ping ping = new Ping())
 				{
-					System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
 					PingReply reply = ping.Send(cleanHost, pingTimeoutMs);
-					sw.Stop();
 					if (reply != null && reply.Status == IPStatus.Success)
 					{
 						pingOk = true;
 						pingMs = reply.RoundtripTime;
 
-						// Защита от виртуальных TUN/VPN адаптеров (sing-box, clash, tun2socks и др.),
-						// которые локально перехватывают ICMP и мгновенно возвращают ответ за 0 мс для любых несуществующих IP
+						// Защита от виртуальных TUN/VPN/NAT адаптеров (VirtualBox, sing-box, clash, tun2socks и др.),
+						// которые локально перехватывают ICMP и мгновенно возвращают ответ за 0 мс для любых несуществующих внешних IP
 						if (reply.RoundtripTime == 0 && !IsLocalHostOrLoopback(cleanHost) && !isSmbOpen)
 						{
 							pingOk = false;
-							pingMs = 0;
+							pingMs = -1;
 						}
 					}
 				}
@@ -504,7 +536,7 @@ namespace CertHarvester
 
 			if (!pingOk)
 			{
-				pingMs = 0;
+				pingMs = -1;
 			}
 
 			return isSmbOpen || pingOk;
@@ -589,14 +621,15 @@ namespace CertHarvester
 							if (isAlive)
 							{
 								string hostName = ResolveHostName(targetIp, localIp, 600);
+								bool isWin = isSmbOpen || IsLocalHostOrLoopback(targetIp);
 								DiscoveredHostItem item = new DiscoveredHostItem
 								{
 									IpAddress = targetIp,
 									Name = hostName,
-									IsWindows = isSmbOpen,
+									IsWindows = isWin,
 									PingTimeMs = pingMs,
-									IsSelected = isSmbOpen,
-									StatusText = isSmbOpen ? "Windows ПК" : "Устройство в сети"
+									IsSelected = isWin,
+									StatusText = isWin ? "Windows ПК" : "Устройство в сети"
 								};
 
 								if (onHostFound != null)
